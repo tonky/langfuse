@@ -12,7 +12,10 @@ export type OtelProcessingHooks = {
   onRowEnqueued?: (row: RowKey) => void;
 };
 
-/** Overrides apply to a single direct ingestion call and its asynchronous I/O. */
+/**
+ * Primary ingestion uses this scope to observe writes inside shared services.
+ * Replay receives its write target explicitly so losing this scope cannot redirect a write.
+ */
 export const otelProcessingHooks = new AsyncLocalStorage<
   OtelProcessingHooks | undefined
 >();

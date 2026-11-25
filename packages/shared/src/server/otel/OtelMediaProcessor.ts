@@ -1,5 +1,5 @@
 import type { MediaContentType, MediaField } from "../../domain/media";
-import { recordDistribution, recordIncrement } from "../instrumentation";
+import * as mediaMetrics from "../instrumentation";
 import { logger } from "../logger";
 import {
   transformMediaPayload,
@@ -86,6 +86,7 @@ type ProcessContext = {
   mediaPrefix: string;
   uploadMedia: UploadOtelMedia;
   result: OtelMediaProcessResult;
+  metrics?: typeof mediaMetrics;
 };
 
 /**
@@ -103,6 +104,8 @@ export async function processOtelMedia(params: {
   writePath: OtelMediaWritePath;
   /** Pipeline label for metrics; does not enable or disable TypeScript media detection. */
   mediaPath?: "early" | "reference";
+  /** Disable logical media metrics without changing media processing or results. */
+  recordIngestionMetrics?: boolean;
   mediaBucket: string;
   mediaPrefix: string;
   uploadMedia: UploadOtelMedia;
@@ -112,10 +115,12 @@ export async function processOtelMedia(params: {
     projectId,
     writePath,
     mediaPath = "reference",
+    recordIngestionMetrics = true,
     mediaBucket,
     mediaPrefix,
     uploadMedia,
   } = params;
+  const metrics = recordIngestionMetrics ? mediaMetrics : undefined;
   const result: OtelMediaProcessResult = {
     uploaded: 0,
     reused: 0,
@@ -152,6 +157,7 @@ export async function processOtelMedia(params: {
         mediaPrefix,
         uploadMedia,
         result,
+        metrics,
       };
       const transformed = await transformMediaPayload(originalValue, {
         processCandidate: (candidate) => processCandidate(candidate, context),
@@ -170,7 +176,7 @@ export async function processOtelMedia(params: {
       }
       if (transformed.bytesRemoved > 0) {
         result.bytesRemoved += transformed.bytesRemoved;
-        recordDistribution(
+        metrics?.recordDistribution(
           "langfuse.ingestion.otel.media.bytes_removed",
           transformed.bytesRemoved,
           { write_path: context.writePath, media_path: context.mediaPath },
@@ -223,13 +229,13 @@ async function processCandidate(
     });
 
     context.result[uploadResult.outcome] += 1;
-    recordIncrement("langfuse.ingestion.otel.media", 1, {
+    context.metrics?.recordIncrement("langfuse.ingestion.otel.media", 1, {
       outcome: uploadResult.outcome,
       media_kind: candidate.kind,
       write_path: context.writePath,
       media_path: context.mediaPath,
     });
-    recordDistribution(
+    context.metrics?.recordDistribution(
       "langfuse.ingestion.otel.media.byte_length",
       contentBytes.length,
       {
@@ -243,7 +249,7 @@ async function processCandidate(
     return `@@@langfuseMedia:type=${candidate.contentType}|id=${uploadResult.mediaId}|source=${candidate.source}@@@`;
   } catch (error) {
     context.result.failed += 1;
-    recordIncrement("langfuse.ingestion.otel.media", 1, {
+    context.metrics?.recordIncrement("langfuse.ingestion.otel.media", 1, {
       outcome: "failed",
       media_kind: candidate.kind,
       write_path: context.writePath,
@@ -349,12 +355,16 @@ function recordDetectionCheck(
 ): void {
   context.result.detectionChecks[path] += 1;
   context.result.detectionCheckedBytes[path] += checkedBytes;
-  recordIncrement("langfuse.ingestion.otel.media.detection_check", 1, {
-    path,
-    write_path: context.writePath,
-    media_path: context.mediaPath,
-  });
-  recordDistribution(
+  context.metrics?.recordIncrement(
+    "langfuse.ingestion.otel.media.detection_check",
+    1,
+    {
+      path,
+      write_path: context.writePath,
+      media_path: context.mediaPath,
+    },
+  );
+  context.metrics?.recordDistribution(
     "langfuse.ingestion.otel.media.detection_check_byte_length",
     checkedBytes,
     { path, write_path: context.writePath, media_path: context.mediaPath },
@@ -367,7 +377,7 @@ function recordInvalidCandidate(
   context: ProcessContext,
 ): void {
   context.result.invalid += 1;
-  recordIncrement("langfuse.ingestion.otel.media", 1, {
+  context.metrics?.recordIncrement("langfuse.ingestion.otel.media", 1, {
     outcome: "invalid",
     media_kind: kind,
     reason,
@@ -382,7 +392,7 @@ function recordIgnoredCandidate(
   context: ProcessContext,
 ): void {
   context.result.ignored += 1;
-  recordIncrement("langfuse.ingestion.otel.media", 1, {
+  context.metrics?.recordIncrement("langfuse.ingestion.otel.media", 1, {
     outcome: "ignored",
     media_kind: kind,
     reason,

@@ -141,6 +141,39 @@ describe("processOtelMedia", () => {
     );
   });
 
+  it("skips logical media metrics when ingestion metrics are disabled", async () => {
+    vi.mocked(recordDistribution).mockClear();
+    vi.mocked(recordIncrement).mockClear();
+
+    const success = createEvent({ value: DATA_URI });
+    const failure = createEvent({ value: DATA_URI });
+    const uploadMedia = vi
+      .fn()
+      .mockResolvedValueOnce({ mediaId: MEDIA_ID, outcome: "uploaded" })
+      .mockRejectedValueOnce(new Error("upload failed"));
+
+    const result = await processOtelMedia({
+      targets: [success.event, failure.event],
+      projectId: "project-id",
+      writePath: "direct",
+      mediaBucket: "media-bucket",
+      mediaPrefix: "media/",
+      recordIngestionMetrics: false,
+      uploadMedia,
+    });
+
+    expect(result).toMatchObject({
+      uploaded: 1,
+      failed: 1,
+      candidates: 2,
+      bytesProcessed: PNG_BYTES.length * 2,
+    });
+    expect(success.body.input).toBe(MEDIA_REFERENCE);
+    expect(failure.body.input).toBe(DATA_URI);
+    expect(recordIncrement).not.toHaveBeenCalled();
+    expect(recordDistribution).not.toHaveBeenCalled();
+  });
+
   it("processes every normalized media field and ignores unrelated fields", async () => {
     const dataUri = DATA_URI;
     const body = {

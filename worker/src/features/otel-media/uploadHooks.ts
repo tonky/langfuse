@@ -4,7 +4,6 @@ import {
   type MediaField,
 } from "@langfuse/shared";
 import {
-  otelProcessingHooks,
   processingHooksFor,
   type OtelWriteTarget,
 } from "../otel-ingestion/processingHooks";
@@ -76,15 +75,15 @@ export async function uploadOtelMedia(
   target: OtelWriteTarget,
   request: OtelMediaUploadRequest,
 ): Promise<OtelMediaUploadResult> {
-  if (target !== "primary") return target.media.upload(request, uploadMedia);
-  const processingHooks = otelProcessingHooks.getStore();
-  const primary = processingHooks?.media?.upload;
-  if (primary) return primary(request, uploadMedia);
-
+  const hooks = processingHooksFor(target);
   try {
+    if (target !== "primary")
+      return await target.media.upload(request, uploadMedia);
+    if (hooks?.media?.upload)
+      return await hooks.media.upload(request, uploadMedia);
     return await uploadMedia(request);
   } catch (error) {
-    processingHooks?.onFailure?.("media_upload");
+    hooks?.onFailure?.("media_upload");
     throw error;
   }
 }
@@ -97,15 +96,15 @@ export async function associateOtelMedia(
     await request.associate();
     return request.result;
   };
-  if (target !== "primary") return target.media.associate(request, primary);
-  const processingHooks = otelProcessingHooks.getStore();
-  const associate = processingHooks?.media?.associate;
-  if (associate) return associate(request, primary);
-
+  const hooks = processingHooksFor(target);
   try {
+    if (target !== "primary")
+      return await target.media.associate(request, primary);
+    if (hooks?.media?.associate)
+      return await hooks.media.associate(request, primary);
     return await primary();
   } catch (error) {
-    processingHooks?.onFailure?.("media_association");
+    hooks?.onFailure?.("media_association");
     throw error;
   }
 }

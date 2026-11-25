@@ -17,7 +17,7 @@ import {
   uploadMediaForTrace,
 } from "@langfuse/shared/src/server";
 import { MediaAssociationOrigin } from "@langfuse/shared";
-import { uploadOtelMedia } from "./uploadHooks";
+import { shouldRecordOtelMediaMetrics, uploadOtelMedia } from "./uploadHooks";
 
 const MEDIA_FIELDS = ["input", "output", "metadata"] as const;
 
@@ -68,6 +68,7 @@ export async function processOtelEventMedia(params: {
   } = params;
   const mediaPath =
     params.mediaPath ?? (params.earlyBatch ? "early" : "reference");
+  const recordIngestionMetrics = shouldRecordOtelMediaMetrics();
 
   if (!mediaBucket) {
     logger.warn(
@@ -98,6 +99,7 @@ export async function processOtelEventMedia(params: {
             mediaPath,
             mediaBucket,
             mediaPrefix,
+            recordIngestionMetrics,
             uploadMedia: (uploadParams) =>
               uploadOtelMedia("primary", {
                 projectId: uploadParams.projectId,
@@ -162,27 +164,31 @@ export async function processOtelEventMedia(params: {
               result.detectionCheckedBytes.structured_payload,
           });
 
-          recordDistribution(
-            "langfuse.ingestion.otel.media.batch_byte_length",
-            result.bytesProcessed,
-            { write_path: writePath, media_path: mediaPath },
-          );
-          recordDistribution(
-            "langfuse.ingestion.otel.media.batch_checked_byte_length",
-            Object.values(result.detectionCheckedBytes).reduce(
-              (total, bytes) => total + bytes,
-              0,
-            ),
-            { write_path: writePath, media_path: mediaPath },
-          );
+          if (recordIngestionMetrics) {
+            recordDistribution(
+              "langfuse.ingestion.otel.media.batch_byte_length",
+              result.bytesProcessed,
+              { write_path: writePath, media_path: mediaPath },
+            );
+            recordDistribution(
+              "langfuse.ingestion.otel.media.batch_checked_byte_length",
+              Object.values(result.detectionCheckedBytes).reduce(
+                (total, bytes) => total + bytes,
+                0,
+              ),
+              { write_path: writePath, media_path: mediaPath },
+            );
+          }
         } finally {
-          recordMediaStageMetrics({
-            durationMs: Date.now() - startedAt,
-            writePath,
-            mediaPath,
-            mediaPresence,
-            inputByteLength: params.inputByteLength,
-          });
+          if (recordIngestionMetrics) {
+            recordMediaStageMetrics({
+              durationMs: Date.now() - startedAt,
+              writePath,
+              mediaPath,
+              mediaPresence,
+              inputByteLength: params.inputByteLength,
+            });
+          }
         }
       },
     );
