@@ -28,7 +28,6 @@ import {
   recordIncrement,
   redis,
   SkillCacheService,
-  traceException,
   uploadMediaForTrace,
   type EventRecordInsertType,
 } from "@langfuse/shared/src/server";
@@ -37,6 +36,7 @@ import { resolveSkillReferences } from "../../services/IngestionService/skillRef
 import { env, v4WritesToLegacyTables } from "../../env";
 import type { ClickhouseWriter } from "../../services/ClickhouseWriter";
 import { TableName } from "../../services/ClickhouseWriter/types";
+import { classifyJobFailure } from "../../queues/jobFailureReason";
 import { fetchEvalRules, type EvalRules } from "../evaluation/fetchEvalRules";
 import { encodeOtelLookups, type OtelLookupResult } from "./encodeOtelLookups";
 import {
@@ -137,10 +137,13 @@ function fetchSampledEvalRules(
       const evalConfigs = await fetchEvalRules(projectId, {
         includeTraceTranscriptRules: sampledTraceIds.length > 0,
       }).catch((error) => {
-        traceException(error);
         logger.warn(
-          `Failed to fetch eval rules for project ${projectId}`,
-          error,
+          "Failed to fetch OTEL eval rules; continuing without eval rules",
+          {
+            projectId,
+            stage: "eval_rules",
+            reason: classifyJobFailure(error),
+          },
         );
         return { observationRules: [], traceTranscriptRules: [] };
       });
@@ -258,10 +261,9 @@ async function uploadOverflowFields(
       logger.warn(
         "Oversized observation field upload failed; persisting original field",
         {
-          error,
           projectId,
-          observationId: request.observationId,
-          field: request.field,
+          stage: "overflow_media_upload",
+          reason: classifyJobFailure(error),
         },
       );
     }
@@ -346,14 +348,14 @@ async function writeRecordsAndScheduleEvals(
     sampledTraceIds,
     evalConfigs,
   }: EvalRuleResolution,
-  { projectId, fileKey }: OtelProcessingContext,
+  { projectId }: OtelProcessingContext,
   writer: NativeEventWriter,
   writes: OtelWriteTarget,
 ): Promise<void> {
   const needsScheduler =
     evalConfigs.observationRules.length > 0 || sampledTraceIds.length > 0;
   const schedulerDeps = needsScheduler
-    ? createEvalSchedulerDeps(writes, projectId, evalConfigs)
+    ? createEvalSchedulerDeps(projectId, evalConfigs, writes)
     : null;
   const filterRows = schedulerDeps
     ? parseEvaluationFilterRows(evaluationFilterRows)
@@ -382,7 +384,6 @@ async function writeRecordsAndScheduleEvals(
             buildFailureContext: () => ({
               projectId,
               observationId: record.event.ids.id,
-              fileKey,
             }),
           })
         : undefined;
@@ -408,12 +409,12 @@ async function writeRecordsAndScheduleEvals(
         }
       } catch (error) {
         hooks?.onFailure?.("row_write");
-        traceException(error);
         logger.error(
-          `Failed to write event record for ${record.event.ids.id}`,
+          "Failed to write OTEL event record; continuing ingestion",
           {
-            error,
-            fileKey,
+            projectId,
+            stage: "row_write",
+            reason: classifyJobFailure(error),
           },
         );
       }
@@ -426,7 +427,7 @@ async function uploadRequestedMedia(
   batch: EarlyOtelBatch,
   processing: RustOtelBatch,
   mediaRequests: OtelMediaRequest[],
-  { projectId, fileKey }: OtelProcessingContext,
+  { projectId }: OtelProcessingContext,
   writes: OtelWriteTarget,
 ): Promise<OtelMediaResolution[]> {
   const mediaResults = new Array<OtelMediaResolution>(mediaRequests.length);
@@ -483,11 +484,9 @@ async function uploadRequestedMedia(
       logger.warn(
         "Native OTEL media upload failed; keeping the original inline value",
         {
-          error,
           projectId,
-          fileKey,
-          observationId: request.observationId,
-          field: request.field,
+          stage: "media_upload",
+          reason: classifyJobFailure(error),
         },
       );
     }
@@ -510,7 +509,7 @@ async function uploadRequestedMedia(
 
 async function resolveLookups(
   lookupRequests: OtelLookupRequest[],
-  { projectId, fileKey }: OtelProcessingContext,
+  { projectId }: OtelProcessingContext,
   writes: OtelWriteTarget,
 ): Promise<OtelLookupResult[]> {
   const prompts = new PromptService(prisma, redis);
@@ -562,12 +561,12 @@ async function resolveLookups(
             };
           } catch (error) {
             processingHooksFor(writes)?.onFailure?.("lookup");
-            traceException(error);
-            logger.error(
-              `Failed to create event record for project ${projectId} and observation ${request.spanId}`,
-              { error, fileKey },
-            );
-            return { error: String(error) };
+            const reason = classifyJobFailure(error);
+            logger.error("Failed to resolve OTEL lookup", {
+              projectId,
+              reason,
+            });
+            return { error: reason };
           }
         }),
       )),

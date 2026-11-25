@@ -17,6 +17,8 @@ import {
   shouldRecordOtelMediaMetrics,
   uploadOtelMedia,
 } from "../otel-media/uploadHooks";
+import { classifyJobFailure } from "../../queues/jobFailureReason";
+import type { OtelWriteTarget } from "../otel-ingestion/processingHooks";
 
 const OBSERVATION_FIELD_OVERFLOW_UPLOAD_BATCH_SIZE = 3;
 
@@ -38,6 +40,7 @@ type OverflowResult = {
 
 export async function applyObservationFieldOverflow(
   eventRecord: EventRecordInsertType,
+  target: OtelWriteTarget = "primary",
 ): Promise<EventRecordInsertType> {
   if (env.LANGFUSE_OBSERVATION_FIELD_OVERFLOW_ENABLED !== "true") {
     return eventRecord;
@@ -66,6 +69,7 @@ export async function applyObservationFieldOverflow(
             eventRecord,
             candidates,
             mediaBucket,
+            target,
           );
 
           span.setAttributes({
@@ -107,10 +111,9 @@ export async function applyObservationFieldOverflow(
     logger.warn(
       "Observation field overflow processing failed; persisting original record",
       {
-        error,
+        stage: "observation_field_overflow",
         projectId: eventRecord.project_id,
-        traceId: eventRecord.trace_id,
-        observationId: eventRecord.span_id,
+        failureReason: classifyJobFailure(error),
       },
     );
     return eventRecord;
@@ -145,6 +148,7 @@ async function uploadOverflowCandidates(
   eventRecord: EventRecordInsertType,
   candidates: OverflowCandidate[],
   mediaBucket: string,
+  target: OtelWriteTarget,
 ): Promise<OverflowResult[]> {
   const overflowResults: OverflowResult[] = [];
 
@@ -160,7 +164,7 @@ async function uploadOverflowCandidates(
     );
     const settledBatch = await Promise.allSettled(
       batch.map((candidate) =>
-        uploadOverflowCandidate(eventRecord, candidate, mediaBucket),
+        uploadOverflowCandidate(eventRecord, candidate, mediaBucket, target),
       ),
     );
 
@@ -209,9 +213,10 @@ async function uploadOverflowCandidate(
   eventRecord: EventRecordInsertType,
   candidate: OverflowCandidate,
   mediaBucket: string,
+  target: OtelWriteTarget,
 ): Promise<OverflowResult> {
   const { field, value, originalBytes } = candidate;
-  const uploadResult = await uploadOtelMedia("primary", {
+  const uploadResult = await uploadOtelMedia(target, {
     projectId: eventRecord.project_id,
     traceId: eventRecord.trace_id,
     observationId: eventRecord.span_id,
@@ -236,15 +241,12 @@ async function uploadOverflowCandidate(
     logger.warn(
       "Oversized observation field upload failed; persisting original field",
       {
-        error,
+        stage: "media_upload",
         projectId: eventRecord.project_id,
-        traceId: eventRecord.trace_id,
-        observationId: eventRecord.span_id,
-        field,
-        originalBytes,
+        failureReason: classifyJobFailure(error),
       },
     );
-    if (shouldRecordOtelMediaMetrics()) {
+    if (shouldRecordOtelMediaMetrics(target)) {
       const metricTags = { field, outcome: "failed" };
       recordIncrement(
         "langfuse.ingestion.observation_field_overflow",
@@ -276,7 +278,7 @@ async function uploadOverflowCandidate(
     0,
   );
 
-  if (shouldRecordOtelMediaMetrics()) {
+  if (shouldRecordOtelMediaMetrics(target)) {
     const metricTags = { field, outcome: uploadResult.outcome };
     recordIncrement(
       "langfuse.ingestion.observation_field_overflow",

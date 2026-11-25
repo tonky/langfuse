@@ -674,7 +674,6 @@ export const otelIngestionQueueProcessorBuilder = (
             orgId: job.data.payload.authCheck.scope.orgId,
             fileKey,
             error: prepared.error,
-            propagatedHeaders: job.data.payload.propagatedHeaders,
           });
           return;
         }
@@ -734,7 +733,6 @@ export const otelIngestionQueueProcessorBuilder = (
               orgId: job.data.payload.authCheck.scope.orgId,
               fileKey,
               error: maskingResult.error,
-              propagatedHeaders: job.data.payload.propagatedHeaders,
             });
             return;
           }

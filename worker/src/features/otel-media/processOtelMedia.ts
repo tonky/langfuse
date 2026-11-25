@@ -1,5 +1,10 @@
 import type { EarlyOtelBatch } from "@langfuse/native";
 import {
+  processingHooksFor,
+  type OtelWriteTarget,
+} from "../otel-ingestion/processingHooks";
+import { classifyJobFailure } from "../../queues/jobFailureReason";
+import {
   resolveExtractedMedia,
   restoreInlineMedia,
 } from "./resolveExtractedMedia";
@@ -56,24 +61,25 @@ export async function processOtelEventMedia(params: {
   mediaPrefix: string;
   inputByteLength?: number;
   processMedia?: typeof processOtelMedia;
+  writeTarget?: OtelWriteTarget;
 }): Promise<OtelMediaPresence | undefined> {
   const {
     targets,
     writePath,
     projectId,
-    fileKey,
     mediaBucket,
     mediaPrefix,
     processMedia = processOtelMedia,
   } = params;
+  const writeTarget = params.writeTarget ?? "primary";
   const mediaPath =
     params.mediaPath ?? (params.earlyBatch ? "early" : "reference");
-  const recordIngestionMetrics = shouldRecordOtelMediaMetrics();
+  const recordIngestionMetrics = shouldRecordOtelMediaMetrics(writeTarget);
 
   if (!mediaBucket) {
     logger.warn(
       "OTEL media upload is enabled but no media storage bucket is configured",
-      { projectId, fileKey },
+      { projectId },
     );
     return;
   }
@@ -101,7 +107,7 @@ export async function processOtelEventMedia(params: {
             mediaPrefix,
             recordIngestionMetrics,
             uploadMedia: (uploadParams) =>
-              uploadOtelMedia("primary", {
+              uploadOtelMedia(writeTarget, {
                 projectId: uploadParams.projectId,
                 traceId: uploadParams.traceId,
                 observationId: uploadParams.observationId,
@@ -127,6 +133,7 @@ export async function processOtelEventMedia(params: {
               mediaBucket,
               mediaPrefix,
               writePath,
+              target: writeTarget,
             });
             result.uploaded += early.uploaded;
             result.reused += early.reused;
@@ -206,8 +213,13 @@ export async function processOtelEventMedia(params: {
     }
     logger.warn(
       "OTEL media processing failed; continuing ingestion with original span values",
-      { projectId, fileKey, error },
+      {
+        stage: "media_processing",
+        projectId,
+        failureReason: classifyJobFailure(error),
+      },
     );
+    processingHooksFor(writeTarget)?.onFailure?.("media_processing");
     return "unknown";
   }
 }

@@ -7,7 +7,6 @@ import {
 import { Prisma } from "@langfuse/shared/src/db";
 import { logger, recordIncrement } from "@langfuse/shared/src/server";
 import { createEvalSchedulerDeps, scheduleEvals } from "../scheduleEvals";
-import { otelProcessingHooks } from "../../otel-ingestion/processingHooks";
 import type { EvalRules } from "../fetchEvalRules";
 import {
   createMockSchedulerDeps,
@@ -90,11 +89,7 @@ describe("scheduleEvals", () => {
         observationRules: [createTestEvalConfig()],
         traceTranscriptRules: recordTraces ? [facetRule] : [],
       };
-      const schedulerDeps = createEvalSchedulerDeps(
-        "primary",
-        projectId,
-        rules,
-      );
+      const schedulerDeps = createEvalSchedulerDeps(projectId, rules);
       const observation = createTestObservation({ name: "selected" });
       const buildFailureContext = () => ({
         projectId,
@@ -165,7 +160,7 @@ describe("scheduleEvals", () => {
       environment: "production",
       traceActivity: createTraceActivity("trace"),
       rules,
-      schedulerDeps: createEvalSchedulerDeps("primary", projectId, rules),
+      schedulerDeps: createEvalSchedulerDeps(projectId, rules),
     });
     expect(matched).toEqual([]);
     expect(parseObservation).not.toHaveBeenCalled();
@@ -173,7 +168,7 @@ describe("scheduleEvals", () => {
   });
 
   it.each(["error", "warn"] as const)(
-    "keeps project and observation IDs when conversion fails (%s)",
+    "reports conversion failures without customer data (%s)",
     async (level) => {
       const error = new Error("Invalid observation");
       const log = vi.spyOn(logger, level).mockImplementation(() => logger);
@@ -194,13 +189,12 @@ describe("scheduleEvals", () => {
           environment: "production",
           traceActivity: createTraceActivity("trace"),
           rules,
-          schedulerDeps: createEvalSchedulerDeps("primary", projectId, rules),
+          schedulerDeps: createEvalSchedulerDeps(projectId, rules),
         });
         expect(log).toHaveBeenCalledExactlyOnceWith(expect.any(String), {
-          error,
-          fileKey: "batch.json",
+          stage: expect.any(String),
           projectId,
-          observationId: "invalid-span",
+          failureReason: "other",
         });
       } finally {
         log.mockRestore();
@@ -214,18 +208,8 @@ describe("scheduleEvals", () => {
       observationRules: [],
       traceTranscriptRules: [facetRule],
     };
-    const firstBatch = createEvalSchedulerDeps("primary", projectId, rules);
-    const captured = vi.fn();
-    const secondBatch = otelProcessingHooks.run(
-      {
-        scheduling: {
-          recordTraceActivity: async (project, rows) => {
-            captured(project, structuredClone(rows));
-          },
-        },
-      },
-      () => createEvalSchedulerDeps("primary", projectId, rules),
-    );
+    const firstBatch = createEvalSchedulerDeps(projectId, rules);
+    const secondBatch = createEvalSchedulerDeps(projectId, rules);
     const observation = createTestObservation({ name: "selected" });
     const matched = await Promise.all(
       [firstBatch, secondBatch].map((schedulerDeps, index) =>
@@ -268,8 +252,8 @@ describe("scheduleEvals", () => {
     expect(mocks.record).toHaveBeenCalledTimes(1);
 
     await secondBatch.flushTraceActivity();
-    expect(mocks.record).toHaveBeenCalledTimes(1);
-    expect(captured).toHaveBeenCalledExactlyOnceWith(projectId, [
+    expect(mocks.record).toHaveBeenCalledTimes(2);
+    expect(mocks.record).toHaveBeenNthCalledWith(2, projectId, [
       {
         traceId: "trace-1",
         spanStartTimeISO: startTimeISO,
@@ -283,9 +267,8 @@ describe("scheduleEvals", () => {
     const error = new Error("Redis unavailable");
     mocks.record.mockRejectedValueOnce(error);
     const warn = vi.spyOn(logger, "warn").mockImplementation(() => logger);
-    const onFailure = vi.fn();
     try {
-      const schedulerDeps = createEvalSchedulerDeps("primary", projectId, {
+      const schedulerDeps = createEvalSchedulerDeps(projectId, {
         observationRules: [],
         traceTranscriptRules: [],
       });
@@ -295,15 +278,14 @@ describe("scheduleEvals", () => {
         serializedEventBytes: 120,
       });
 
-      await expect(
-        otelProcessingHooks.run({ onFailure }, () =>
-          schedulerDeps.flushTraceActivity(),
-        ),
-      ).resolves.toBeUndefined();
-      expect(onFailure).toHaveBeenCalledExactlyOnceWith("trace-flush");
+      await expect(schedulerDeps.flushTraceActivity()).resolves.toBeUndefined();
       expect(warn).toHaveBeenCalledExactlyOnceWith(
         "Failed to record trace rule selections",
-        { projectId, error },
+        {
+          stage: "trace_flush",
+          projectId,
+          failureReason: "other",
+        },
       );
       expect(recordIncrement).toHaveBeenCalledWith(
         "langfuse.trace_dispatch.recording_batches",
@@ -332,11 +314,7 @@ describe("scheduleEvals", () => {
           observationRules: hasObservationRule ? [observationRule] : [],
           traceTranscriptRules,
         };
-        const schedulerDeps = createEvalSchedulerDeps(
-          "primary",
-          projectId,
-          rules,
-        );
+        const schedulerDeps = createEvalSchedulerDeps(projectId, rules);
         const matchedRuleIds = [];
         for (const span_id of ["root", "child"]) {
           matchedRuleIds.push(

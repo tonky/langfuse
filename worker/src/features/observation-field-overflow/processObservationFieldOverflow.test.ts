@@ -234,12 +234,9 @@ describe("applyObservationFieldOverflow", () => {
     expect(mocks.logger.warn).toHaveBeenCalledWith(
       "Oversized observation field upload failed; persisting original field",
       {
-        error: uploadError,
+        stage: "media_upload",
         projectId: "project-id",
-        traceId: "trace-id",
-        observationId: "observation-id",
-        field: "input",
-        originalBytes: 11,
+        failureReason: "other",
       },
     );
     expect(mocks.recordIncrement).toHaveBeenCalledWith(
@@ -282,14 +279,11 @@ describe("applyObservationFieldOverflow", () => {
     expect(mocks.logger.warn).toHaveBeenCalledOnce();
     expect(mocks.logger.warn).toHaveBeenCalledWith(
       "Observation field overflow processing failed; persisting original record",
-      expect.objectContaining({
-        error: expect.objectContaining({
-          message: "Media upload bucket is not configured",
-        }),
+      {
+        stage: "observation_field_overflow",
         projectId: "project-id",
-        traceId: "trace-id",
-        observationId: "observation-id",
-      }),
+        failureReason: "other",
+      },
     );
   });
 
@@ -336,10 +330,9 @@ describe("applyObservationFieldOverflow", () => {
     expect(mocks.logger.warn).toHaveBeenCalledWith(
       "Observation field overflow processing failed; persisting original record",
       {
-        error: processorError,
+        stage: "observation_field_overflow",
         projectId: "project-id",
-        traceId: "trace-id",
-        observationId: "observation-id",
+        failureReason: "other",
       },
     );
   });

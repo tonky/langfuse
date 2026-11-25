@@ -247,7 +247,7 @@ async function processCandidate(
     );
 
     return `@@@langfuseMedia:type=${candidate.contentType}|id=${uploadResult.mediaId}|source=${candidate.source}@@@`;
-  } catch (error) {
+  } catch {
     context.result.failed += 1;
     context.metrics?.recordIncrement("langfuse.ingestion.otel.media", 1, {
       outcome: "failed",
@@ -259,12 +259,9 @@ async function processCandidate(
       "OTEL media upload failed; leaving normalized value unchanged",
       {
         projectId: context.projectId,
-        traceId: context.traceId,
-        observationId: context.observationId,
         field: context.field,
         mediaKind: candidate.kind,
         mediaBytes: contentBytes.length,
-        error,
       },
     );
   }

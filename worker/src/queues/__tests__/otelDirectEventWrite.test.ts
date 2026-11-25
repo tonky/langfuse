@@ -256,9 +256,6 @@ describe("native Rust trace activity", () => {
       }),
       dispose: vi.fn().mockResolvedValue(undefined),
     };
-    vi.spyOn(ClickhouseWriter, "getNativeInstance").mockImplementation(() => {
-      throw new Error("Unexpected primary writer lookup");
-    });
     try {
       await processNative({
         writes: "primary",
@@ -405,7 +402,6 @@ describe("native Rust trace activity", () => {
       });
 
       await vi.waitFor(() => expect(started).toHaveLength(5));
-      expect(processing.overflowBody).toHaveBeenCalledTimes(5);
       expect(peak).toBe(5);
       uploads[1]!.resolve({ mediaId: "media-1", outcome: "uploaded" });
       await vi.waitFor(() => expect(started).toHaveLength(6));

@@ -231,7 +231,6 @@ export interface OtelProcessingContext {
   fileKey: string
   now: string
   isLangfuseInternal: boolean
-  suppressLogging?: boolean
 }
 
 export interface OtelSkillAvailable {

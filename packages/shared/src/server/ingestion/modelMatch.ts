@@ -72,7 +72,7 @@ export async function findModel(p: ModelMatchProps): Promise<ModelWithPrices> {
         logger.debug(
           formatModelMatchDebugMessage("Resolving model match", {
             projectId: p.projectId,
-            model: p.model,
+            modelInputLength: p.model.length,
             localCacheEnabled:
               env.LANGFUSE_LOCAL_CACHE_MODEL_MATCH_ENABLED === "true",
             redisCacheEnabled:
@@ -147,7 +147,7 @@ export async function findModel(p: ModelMatchProps): Promise<ModelWithPrices> {
               "Model match resolved without a model",
               {
                 projectId: p.projectId,
-                model: p.model,
+                modelInputLength: p.model.length,
                 source: source ?? "none",
                 pricingTierCount: 0,
               },
@@ -171,10 +171,9 @@ export async function findModel(p: ModelMatchProps): Promise<ModelWithPrices> {
         logger.debug(
           formatModelMatchDebugMessage("Model match resolved", {
             projectId: p.projectId,
-            model: p.model,
             source: source ?? "unknown",
             matchedModelId: value.model.id,
-            matchedModelName: value.model.modelName,
+            modelInputLength: p.model.length,
             pricingTierCount: value.pricingTiers.length,
           }),
         );
@@ -239,15 +238,14 @@ const getModelWithPricesFromRedis = async (
     }
 
     // Unknown format
-    logger.warn(
-      `Unknown cache format for model match: ${JSON.stringify(parsed)}`,
-    );
+    logger.warn("Unknown model match cache format", {
+      projectId: p.projectId,
+    });
     return null;
-  } catch (error) {
-    logger.error(
-      `Error getting model for ${JSON.stringify(p)} from Redis`,
-      error,
-    );
+  } catch {
+    logger.error("Error reading model match cache", {
+      projectId: p.projectId,
+    });
     return null;
   }
 };
@@ -360,11 +358,8 @@ const addModelNotFoundTokenToRedis = async (key: string) => {
       "EX",
       env.LANGFUSE_CACHE_MODEL_MATCH_TTL_SECONDS,
     );
-  } catch (error) {
-    logger.error(
-      `Error adding model not found token for ${key} to Redis`,
-      error,
-    );
+  } catch {
+    logger.error("Error writing model match not-found cache");
   }
 };
 
@@ -389,11 +384,8 @@ const addModelWithPricingTiersToRedis = async (
       "EX",
       env.LANGFUSE_CACHE_MODEL_MATCH_TTL_SECONDS,
     );
-  } catch (error) {
-    logger.error(
-      `Error adding model with pricing tiers for ${key} to Redis`,
-      error,
-    );
+  } catch {
+    logger.error("Error writing model match cache", { modelId: model.id });
   }
 };
 
@@ -435,8 +427,8 @@ const getModelMatchEpochs = async (
       getProjectEpochKey(projectId),
     );
     return { global: global ?? null, project: project ?? null };
-  } catch (error) {
-    logger.error(`Error reading model cache epochs for ${projectId}`, error);
+  } catch {
+    logger.error("Error reading model cache epochs", { projectId });
     return null;
   }
 };

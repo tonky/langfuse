@@ -435,7 +435,7 @@ describe("Ingestion Masking", () => {
         } else {
           expect(result.data).toBe(data);
           if (outcome === "fail-closed") {
-            expect(result.error).toContain("invalid masked JSON");
+            expect(result.error).toBe("Invalid masking response");
           }
         }
       },
@@ -601,7 +601,7 @@ describe("Ingestion Masking", () => {
 
       expect(result.success).toBe(false);
       expect(result.masked).toBe(false);
-      expect(result.error).toContain("500");
+      expect(result.error).toBe("HTTP 500");
     });
 
     it("should retry on failure", async () => {
