@@ -7,6 +7,7 @@ import {
 import { Prisma } from "@langfuse/shared/src/db";
 import { logger, recordIncrement } from "@langfuse/shared/src/server";
 import { createEvalSchedulerDeps, scheduleEvals } from "../scheduleEvals";
+import { otelProcessingHooks } from "../../otel-ingestion/processingHooks";
 import type { EvalRules } from "../fetchEvalRules";
 import {
   createMockSchedulerDeps,
@@ -89,7 +90,11 @@ describe("scheduleEvals", () => {
         observationRules: [createTestEvalConfig()],
         traceTranscriptRules: recordTraces ? [facetRule] : [],
       };
-      const schedulerDeps = createEvalSchedulerDeps(projectId, rules);
+      const schedulerDeps = createEvalSchedulerDeps(
+        "primary",
+        projectId,
+        rules,
+      );
       const observation = createTestObservation({ name: "selected" });
       const buildFailureContext = () => ({
         projectId,
@@ -160,7 +165,7 @@ describe("scheduleEvals", () => {
       environment: "production",
       traceActivity: createTraceActivity("trace"),
       rules,
-      schedulerDeps: createEvalSchedulerDeps(projectId, rules),
+      schedulerDeps: createEvalSchedulerDeps("primary", projectId, rules),
     });
     expect(matched).toEqual([]);
     expect(parseObservation).not.toHaveBeenCalled();
@@ -189,7 +194,7 @@ describe("scheduleEvals", () => {
           environment: "production",
           traceActivity: createTraceActivity("trace"),
           rules,
-          schedulerDeps: createEvalSchedulerDeps(projectId, rules),
+          schedulerDeps: createEvalSchedulerDeps("primary", projectId, rules),
         });
         expect(log).toHaveBeenCalledExactlyOnceWith(expect.any(String), {
           error,
@@ -209,8 +214,18 @@ describe("scheduleEvals", () => {
       observationRules: [],
       traceTranscriptRules: [facetRule],
     };
-    const firstBatch = createEvalSchedulerDeps(projectId, rules);
-    const secondBatch = createEvalSchedulerDeps(projectId, rules);
+    const firstBatch = createEvalSchedulerDeps("primary", projectId, rules);
+    const captured = vi.fn();
+    const secondBatch = otelProcessingHooks.run(
+      {
+        scheduling: {
+          recordTraceActivity: async (project, rows) => {
+            captured(project, structuredClone(rows));
+          },
+        },
+      },
+      () => createEvalSchedulerDeps("primary", projectId, rules),
+    );
     const observation = createTestObservation({ name: "selected" });
     const matched = await Promise.all(
       [firstBatch, secondBatch].map((schedulerDeps, index) =>
@@ -253,7 +268,8 @@ describe("scheduleEvals", () => {
     expect(mocks.record).toHaveBeenCalledTimes(1);
 
     await secondBatch.flushTraceActivity();
-    expect(mocks.record).toHaveBeenNthCalledWith(2, projectId, [
+    expect(mocks.record).toHaveBeenCalledTimes(1);
+    expect(captured).toHaveBeenCalledExactlyOnceWith(projectId, [
       {
         traceId: "trace-1",
         spanStartTimeISO: startTimeISO,
@@ -267,8 +283,9 @@ describe("scheduleEvals", () => {
     const error = new Error("Redis unavailable");
     mocks.record.mockRejectedValueOnce(error);
     const warn = vi.spyOn(logger, "warn").mockImplementation(() => logger);
+    const onFailure = vi.fn();
     try {
-      const schedulerDeps = createEvalSchedulerDeps(projectId, {
+      const schedulerDeps = createEvalSchedulerDeps("primary", projectId, {
         observationRules: [],
         traceTranscriptRules: [],
       });
@@ -278,7 +295,12 @@ describe("scheduleEvals", () => {
         serializedEventBytes: 120,
       });
 
-      await expect(schedulerDeps.flushTraceActivity()).resolves.toBeUndefined();
+      await expect(
+        otelProcessingHooks.run({ onFailure }, () =>
+          schedulerDeps.flushTraceActivity(),
+        ),
+      ).resolves.toBeUndefined();
+      expect(onFailure).toHaveBeenCalledExactlyOnceWith("trace-flush");
       expect(warn).toHaveBeenCalledExactlyOnceWith(
         "Failed to record trace rule selections",
         { projectId, error },
@@ -310,7 +332,11 @@ describe("scheduleEvals", () => {
           observationRules: hasObservationRule ? [observationRule] : [],
           traceTranscriptRules,
         };
-        const schedulerDeps = createEvalSchedulerDeps(projectId, rules);
+        const schedulerDeps = createEvalSchedulerDeps(
+          "primary",
+          projectId,
+          rules,
+        );
         const matchedRuleIds = [];
         for (const span_id of ["root", "child"]) {
           matchedRuleIds.push(

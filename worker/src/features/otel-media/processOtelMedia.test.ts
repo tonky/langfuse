@@ -39,6 +39,7 @@ vi.mock("@langfuse/shared/src/server", () => ({
 
 import { MediaAssociationOrigin } from "@langfuse/shared";
 import type { IngestionEventType } from "@langfuse/shared/src/server";
+import { otelProcessingHooks } from "../otel-ingestion/processingHooks";
 import {
   createDirectOtelMediaTargets,
   createLegacyOtelMediaTargets,
@@ -216,20 +217,43 @@ describe("processOtelEventMedia", () => {
       input: { role: "user" },
       name: "observation-name",
     };
-    const processMedia = vi.fn().mockResolvedValue(processResult);
-
-    const mediaPresence = await processOtelEventMedia({
-      targets: createDirectOtelMediaTargets([
-        eventInput,
-        { traceId: "trace-id", spanId: "without-media-fields" },
-        { traceId: "trace-id", input: "missing-span-id" },
-        null,
-      ]),
-      writePath: "direct",
-      ...MEDIA_DESTINATION,
-      fileKey: "file-key",
-      processMedia,
+    const uploadRequest = {
+      projectId: "project-id",
+      traceId: "trace-id",
+      observationId: "observation-id",
+      field: "input" as const,
+      contentType: "image/png" as const,
+      contentBytes: Buffer.from("media"),
+      mediaBucket: "media-bucket",
+      mediaPrefix: "media/",
+    };
+    const hookedResult = {
+      mediaId: "hooked-media",
+      outcome: "reused" as const,
+      byteLength: uploadRequest.contentBytes.length,
+    };
+    const uploadHook = vi.fn().mockResolvedValue(hookedResult);
+    const processMedia = vi.fn(async ({ uploadMedia }) => {
+      expect(await uploadMedia(uploadRequest)).toEqual(hookedResult);
+      return processResult;
     });
+
+    const mediaPresence = await otelProcessingHooks.run(
+      { media: { upload: uploadHook } },
+      () =>
+        processOtelEventMedia({
+          targets: createDirectOtelMediaTargets([
+            eventInput,
+            { traceId: "trace-id", spanId: "without-media-fields" },
+            { traceId: "trace-id", input: "missing-span-id" },
+            null,
+          ]),
+          writePath: "direct",
+          ...MEDIA_DESTINATION,
+          fileKey: "file-key",
+          processMedia,
+        }),
+    );
 
     expect(mediaPresence).toBe("present");
     expect(processMedia).toHaveBeenCalledWith(
@@ -245,17 +269,10 @@ describe("processOtelEventMedia", () => {
         mediaPath: "reference",
       }),
     );
+    expect(uploadHook).toHaveBeenCalledOnce();
+    expect(mocks.uploadMediaForTrace).not.toHaveBeenCalled();
     const uploadMedia = processMedia.mock.calls[0]?.[0].uploadMedia;
-    await uploadMedia({
-      projectId: "project-id",
-      traceId: "trace-id",
-      observationId: "observation-id",
-      field: "input",
-      contentType: "image/png",
-      contentBytes: Buffer.from("media"),
-      mediaBucket: "media-bucket",
-      mediaPrefix: "media/",
-    });
+    await uploadMedia(uploadRequest);
     expect(mocks.uploadMediaForTrace).toHaveBeenCalledWith(
       expect.objectContaining({
         origin: MediaAssociationOrigin.INGESTION_MEDIA_EXTRACTION,
@@ -658,7 +675,7 @@ describe("processOtelEventMedia", () => {
     readMedia.mockImplementation(() => {
       throw new Error("media registry should not be read");
     });
-    const result = await uploadExtractedMediaOnce({
+    const result = await uploadExtractedMediaOnce("primary", {
       batch,
       projectId: "project-id",
       traceId: "trace-id",

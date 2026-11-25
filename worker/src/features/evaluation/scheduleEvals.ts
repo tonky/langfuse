@@ -18,9 +18,17 @@ import {
   recordTraceActivity,
   type TraceSpanActivity,
 } from "../traceDispatch/traceRuleRecording";
+import {
+  processingHooksFor,
+  type OtelWriteTarget,
+} from "../otel-ingestion/processingHooks";
 
 /** Prepare rules and own the trace-activity buffer for one ingestion batch. */
-export function createEvalSchedulerDeps(projectId: string, rules: EvalRules) {
+export function createEvalSchedulerDeps(
+  target: OtelWriteTarget,
+  projectId: string,
+  rules: EvalRules,
+) {
   // The caller flushes this buffer before returning.
   const traceActivity: TraceSpanActivity[] = [];
   const traceTranscriptRules = prepareTraceDispatchRules(
@@ -35,8 +43,14 @@ export function createEvalSchedulerDeps(projectId: string, rules: EvalRules) {
     return [];
   });
 
+  const hooks = processingHooksFor(target)?.scheduling;
+  const realObservationDeps = createObservationEvalSchedulerDeps();
+  const observationDeps =
+    target === "primary"
+      ? (hooks?.observationWrites?.(realObservationDeps) ?? realObservationDeps)
+      : target.scheduling.observationWrites(realObservationDeps);
   return {
-    ...createObservationEvalSchedulerDeps(),
+    ...observationDeps,
     traceTranscriptRules,
     collectTraceActivity: (activity: TraceSpanActivity): void => {
       traceActivity.push(activity);
@@ -46,23 +60,30 @@ export function createEvalSchedulerDeps(projectId: string, rules: EvalRules) {
       const startedAt = performance.now();
       let outcome = "success";
       try {
-        await recordTraceActivity(projectId, traceActivity);
+        const recordActivity =
+          target === "primary"
+            ? (hooks?.recordTraceActivity ?? recordTraceActivity)
+            : target.scheduling.recordTraceActivity;
+        await recordActivity(projectId, traceActivity);
         traceActivity.length = 0;
       } catch (error) {
         outcome = "error";
+        processingHooksFor(target)?.onFailure?.("trace-flush");
         logger.warn("Failed to record trace rule selections", {
           projectId,
           error,
         });
       } finally {
-        recordIncrement("langfuse.trace_dispatch.recording_batches", 1, {
-          outcome,
-        });
-        recordDistribution(
-          "langfuse.trace_dispatch.recording_duration_ms",
-          performance.now() - startedAt,
-          { outcome, unit: "milliseconds" },
-        );
+        if (processingHooksFor(target)?.recordIngestionMetrics !== false) {
+          recordIncrement("langfuse.trace_dispatch.recording_batches", 1, {
+            outcome,
+          });
+          recordDistribution(
+            "langfuse.trace_dispatch.recording_duration_ms",
+            performance.now() - startedAt,
+            { outcome, unit: "milliseconds" },
+          );
+        }
       }
     },
   };

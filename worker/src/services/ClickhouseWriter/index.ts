@@ -118,10 +118,9 @@ export class ClickhouseWriter<
   ): ClickhouseWriter<NativeWriterPayloadMap> {
     let instance = ClickhouseWriter.nativeInstance;
     if (!instance) {
-      instance = new ClickhouseWriter<NativeWriterPayloadMap>(
+      instance = ClickhouseWriter.createNativeWriter(
         client,
         nativeWriteStrategyFactory,
-        TableName.EventsFull,
       );
       ClickhouseWriter.nativeInstance = instance;
     } else if (client) {
@@ -130,7 +129,19 @@ export class ClickhouseWriter<
     return instance;
   }
 
-  /** Stop every writer instance created in this process. */
+  /** An independent writer owns its buffer and timer. Its caller must shut it down. */
+  public static createNativeWriter(
+    client: ClickhouseClientType | undefined,
+    strategy: ClickhouseWriteStrategyFactory<PreparedEvent>,
+  ) {
+    return new ClickhouseWriter<NativeWriterPayloadMap>(
+      client,
+      strategy,
+      TableName.EventsFull,
+    );
+  }
+
+  /** Stop the process-wide writers. */
   public static async shutdownAll(): Promise<void> {
     await Promise.all([
       ClickhouseWriter.instance?.shutdown(),

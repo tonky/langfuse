@@ -7,6 +7,7 @@ import * as opentelemetry from "@opentelemetry/api";
 import * as dd from "dd-trace";
 import { env } from "../../env";
 import { logger } from "../logger";
+import { isCustomerDataLoggingSuppressed } from "../loggingContext";
 import { getProjectSize } from "../projectSize";
 import { CLICKHOUSE_ROUTE_CONTEXT_KEY } from "../clickhouse/queryTags";
 
@@ -166,8 +167,16 @@ export const traceException = (
     return;
   }
 
+  if (isCustomerDataLoggingSuppressed()) {
+    ex = Object.assign(new Error("customer data suppressed"), {
+      name: "CustomerDataSuppressedError",
+      stack: undefined,
+    });
+    code = "customer_data_suppressed";
+  }
+
   const exception = {
-    code: code,
+    code,
     message:
       ex instanceof Error
         ? ex.message
@@ -277,7 +286,20 @@ export const addUserToSpan = (
   return opentelemetry.propagation.setBaggage(ctx, baggage);
 };
 
-export const getTracer = (name: string) => opentelemetry.trace.getTracer(name);
+let suppressedTracer: opentelemetry.Tracer | undefined;
+
+export function getTracer(name: string) {
+  if (!isCustomerDataLoggingSuppressed())
+    return opentelemetry.trace.getTracer(name);
+  // An undelegated tracer cannot export attributes from this scope.
+  if (!suppressedTracer) {
+    suppressedTracer = new opentelemetry.ProxyTracer(
+      { getDelegateTracer: () => undefined },
+      "customer-data-suppressed",
+    );
+  }
+  return suppressedTracer;
+}
 
 const cloudWatchClient = new CloudWatchClient();
 let lastFlushTime = 0;

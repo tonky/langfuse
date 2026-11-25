@@ -1,3 +1,4 @@
+import { otelProcessingHooks } from "./processingHooks";
 import { restoreInlineMedia } from "../otel-media/resolveExtractedMedia";
 import type { EarlyOtelBatch } from "@langfuse/native";
 import { convertEventRecordToObservationForEval } from "@langfuse/shared";
@@ -112,9 +113,10 @@ export async function processOtelEvents({
   }
 
   const schedulerDeps = needsScheduler
-    ? createEvalSchedulerDeps(projectId, rules)
+    ? createEvalSchedulerDeps("primary", projectId, rules)
     : null;
 
+  const hooks = otelProcessingHooks.getStore();
   await Promise.all(
     // Process each event independently
     eventInputs.map(async (eventInput) => {
@@ -126,6 +128,7 @@ export async function processOtelEvents({
           fileKey,
         );
       } catch (error) {
+        hooks?.onFailure?.("lookup");
         traceException(error);
         logger.error(
           `Failed to create event record for project ${eventInput.projectId} and observation ${eventInput.spanId}`,
@@ -169,6 +172,11 @@ export async function processOtelEvents({
         try {
           const persistedRecord =
             await ingestionService.writeEventRecord(eventRecord);
+          hooks?.onRowEnqueued?.({
+            traceId: persistedRecord.trace_id,
+            spanId: persistedRecord.span_id,
+            startTime: persistedRecord.start_time,
+          });
           // Record activity only after the event writer accepts the span.
           if (traceActivity && schedulerDeps && matchedRuleIds !== undefined) {
             schedulerDeps.collectTraceActivity({
@@ -180,6 +188,7 @@ export async function processOtelEvents({
             });
           }
         } catch (error) {
+          hooks?.onFailure?.("row_write");
           traceException(error);
           logger.error(
             `Failed to write event record for ${eventInput.spanId}`,

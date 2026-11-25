@@ -13,6 +13,10 @@ import {
 } from "@langfuse/shared";
 
 import { env } from "../../env";
+import {
+  shouldRecordOtelMediaMetrics,
+  uploadOtelMedia,
+} from "../otel-media/uploadHooks";
 
 const OBSERVATION_FIELD_OVERFLOW_UPLOAD_BATCH_SIZE = 3;
 
@@ -207,17 +211,27 @@ async function uploadOverflowCandidate(
   mediaBucket: string,
 ): Promise<OverflowResult> {
   const { field, value, originalBytes } = candidate;
-
-  const uploadResult = await uploadMediaForTrace({
+  const uploadResult = await uploadOtelMedia("primary", {
     projectId: eventRecord.project_id,
     traceId: eventRecord.trace_id,
     observationId: eventRecord.span_id,
     field,
     contentType: MediaContentType.TXT,
-    contentBytes: Buffer.from(value, "utf8"),
-    mediaBucket,
-    mediaPrefix: env.LANGFUSE_S3_MEDIA_UPLOAD_PREFIX,
     origin: MediaAssociationOrigin.INGESTION_FIELD_OVERFLOW,
+    loadBody: async () => Buffer.from(value, "utf8"),
+    upload: (contentBytes, sha256Hash) =>
+      uploadMediaForTrace({
+        projectId: eventRecord.project_id,
+        traceId: eventRecord.trace_id,
+        observationId: eventRecord.span_id,
+        field,
+        contentType: MediaContentType.TXT,
+        contentBytes,
+        ...(sha256Hash ? { sha256Hash } : {}),
+        mediaBucket,
+        mediaPrefix: env.LANGFUSE_S3_MEDIA_UPLOAD_PREFIX,
+        origin: MediaAssociationOrigin.INGESTION_FIELD_OVERFLOW,
+      }),
   }).catch((error) => {
     logger.warn(
       "Oversized observation field upload failed; persisting original field",
@@ -230,18 +244,19 @@ async function uploadOverflowCandidate(
         originalBytes,
       },
     );
-    const metricTags = { field, outcome: "failed" };
-    recordIncrement(
-      "langfuse.ingestion.observation_field_overflow",
-      1,
-      metricTags,
-    );
-    recordDistribution(
-      "langfuse.ingestion.observation_field_overflow.bytes_removed",
-      0,
-      metricTags,
-    );
-
+    if (shouldRecordOtelMediaMetrics()) {
+      const metricTags = { field, outcome: "failed" };
+      recordIncrement(
+        "langfuse.ingestion.observation_field_overflow",
+        1,
+        metricTags,
+      );
+      recordDistribution(
+        "langfuse.ingestion.observation_field_overflow.bytes_removed",
+        0,
+        metricTags,
+      );
+    }
     return null;
   });
   if (!uploadResult) {
@@ -256,22 +271,24 @@ async function uploadOverflowCandidate(
   const mediaReference =
     `@@@langfuseMedia:type=text/plain|id=${uploadResult.mediaId}` +
     `|source=${OBSERVATION_FIELD_SIZE_LIMIT_MEDIA_SOURCE}@@@`;
-  const metricTags = { field, outcome: uploadResult.outcome };
   const bytesRemoved = Math.max(
     originalBytes - Buffer.byteLength(mediaReference, "utf8"),
     0,
   );
 
-  recordIncrement(
-    "langfuse.ingestion.observation_field_overflow",
-    1,
-    metricTags,
-  );
-  recordDistribution(
-    "langfuse.ingestion.observation_field_overflow.bytes_removed",
-    bytesRemoved,
-    metricTags,
-  );
+  if (shouldRecordOtelMediaMetrics()) {
+    const metricTags = { field, outcome: uploadResult.outcome };
+    recordIncrement(
+      "langfuse.ingestion.observation_field_overflow",
+      1,
+      metricTags,
+    );
+    recordDistribution(
+      "langfuse.ingestion.observation_field_overflow.bytes_removed",
+      bytesRemoved,
+      metricTags,
+    );
+  }
 
   return {
     candidate,
