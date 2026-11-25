@@ -311,8 +311,6 @@ pipeline: {
 				"scripts/vitest/**",
 			]
 			depends_on: ["@langfuse/icons", "@langfuse/shared", "@repo/langfuse-skills", "@repo/oxlint-config", "@repo/typescript-config", "js-root"]
-			shards: 4
-			recorder: "own_linux"
 			resources: {
 				cpus:      2
 				memory_mb: 2560
@@ -323,67 +321,56 @@ pipeline: {
 				clickhouse: pipeline.services.clickhouse
 				seaweedfs:  pipeline.services.seaweedfs
 			}
-			target_scope: {
-				tests: ["web/src/**/*.clienttest.ts", "web/src/**/*.clienttest.tsx", "web/src/**/*.servertest.ts", "web/src/**/*.servertest.tsx"]
-				exclude: [
-					"web/src/__e2e__/**",
-					"web/src/__tests__/server/annotation-queue-assignments-api.servertest.ts",
-					"web/src/__tests__/server/annotation-queues-api.servertest.ts",
-					"web/src/__tests__/server/blob-storage-integration-api.servertest.ts",
-					"web/src/__tests__/server/blob-storage-integration-status-api.servertest.ts",
-					"web/src/__tests__/server/comments-api.servertest.ts",
-					"web/src/__tests__/server/datasets-api.servertest.ts",
-					"web/src/__tests__/server/datasets-schema-validation.servertest.ts",
-					"web/src/__tests__/server/deprecation-signal.servertest.ts",
-					"web/src/__tests__/server/evaluation-rules-public-api.servertest.ts",
-					"web/src/__tests__/server/evaluator-history-public-api.servertest.ts",
-					"web/src/__tests__/server/evaluators-public-api.servertest.ts",
-					"web/src/__tests__/server/experiments-public-api.servertest.ts",
-					"web/src/__tests__/server/ingestion-api.servertest.ts",
-					"web/src/__tests__/server/llm-connections-api.servertest.ts",
-					"web/src/__tests__/server/memberships-api.servertest.ts",
-					"web/src/__tests__/server/metrics-api.servertest.ts",
-					"web/src/__tests__/server/metrics-v2-api.servertest.ts",
-					"web/src/__tests__/server/model-definitions.servertest.ts",
-					"web/src/__tests__/server/model-pricing-tiers.servertest.ts",
-					"web/src/__tests__/server/multilingual-fulltext-search.servertest.ts",
-					"web/src/__tests__/server/observation-api.servertest.ts",
-					"web/src/__tests__/server/observations-api-v2.servertest.ts",
-					"web/src/__tests__/server/observations-api.servertest.ts",
-					"web/src/__tests__/server/org-model-definitions.servertest.ts",
-					"web/src/__tests__/server/organization-llm-connections-api.servertest.ts",
-					"web/src/__tests__/server/organizations-api.servertest.ts",
-					"web/src/__tests__/server/otel-api.servertest.ts",
-					"web/src/__tests__/server/projects-api.servertest.ts",
-					"web/src/__tests__/server/prompts.v1.servertest.ts",
-					"web/src/__tests__/server/prompts.v2.servertest.ts",
-					"web/src/__tests__/server/scim-api.servertest.ts",
-					"web/src/__tests__/server/score-configs.servertest.ts",
-					"web/src/__tests__/server/scores-api-v1.servertest.ts",
-					"web/src/__tests__/server/scores-api-v3.servertest.ts",
-					"web/src/__tests__/server/skill-file-contents.servertest.ts",
-					"web/src/__tests__/server/traces-api.servertest.ts",
-					"web/src/__tests__/server/unstable-dashboard-widgets-api.servertest.ts",
-					"web/src/__tests__/server/unstable-dashboards-api.servertest.ts",
-					"web/src/__tests__/server/code-eval-test-run-trpc.servertest.ts",
-					"web/src/__tests__/server/daily-metrics-api.servertest.ts",
-					"web/src/__tests__/server/mcp-apps-widget-page.servertest.ts",
-					"web/src/__tests__/server/mcp-auth.servertest.ts",
-					"web/src/__tests__/server/media.servertest.ts",
-					"web/src/__tests__/server/prompts-trpc.servertest.ts",
-					"web/src/__tests__/server/scores-api-v2.servertest.ts",
-					"web/src/__tests__/server/sessions-api.servertest.ts",
-					"web/src/__tests__/server/sessions.servertest.ts",
-					"web/src/__tests__/server/slack-integration.servertest.ts",
-				]
-				incidental_reads: ["worker/package.json", "worker/tsconfig.json"]
-				not_run: [
-					{
-						tests: ["web/src/__e2e__/**"]
-						reason: "browser and full-stack e2e suites require running Next.js + ClickHouse + Playwright"
-					},
-					{
-						tests: [
+			jobs: {
+				lint: {
+					services: false
+					resources: {
+						cpus:      2
+						memory_mb: 7680
+					}
+					needs: ["@repo/eslint-plugin:build", "@langfuse/icons:build", "@langfuse/shared:build"]
+					tasks: [{command: "pnpm --filter web run lint"}]
+				}
+				typecheck: {
+					services: false
+					needs:    ["@langfuse/icons:build", "@langfuse/shared:build"]
+					tasks: [{command: "pnpm --filter web run typecheck"}]
+				}
+				test_client: {
+					name:     "run web Vitest client suite"
+					services: false
+					shards:   2
+					recorder: "own_linux"
+					needs:    ["@langfuse/icons:build", "@langfuse/shared:build"]
+					resources: {
+						cpus:      2
+						memory_mb: 4096
+					}
+					target_scope: tests: ["web/src/**/*.clienttest.ts", "web/src/**/*.clienttest.tsx"]
+					tasks: [{
+						name:    "Run web Vitest client suite"
+						command: "\"$ENACT_EXE\" helper vitest --config vitest.client.config.mts --arg=--project --arg=client {relative_targets}"
+						timeout: "20m"
+						env: {
+							"NODE_ENV":           "test"
+							"NODE_VERSION":       "24"
+							"VITEST_MAX_WORKERS": "4"
+						}
+					}]
+				}
+				test: {
+					name:     "run web Vitest server suite"
+					shards:   4
+					recorder: "own_linux"
+					needs:    ["@langfuse/icons:build", "@langfuse/shared:build"]
+					resources: {
+						cpus:      2
+						memory_mb: 5120
+					}
+					target_scope: {
+						tests: ["web/src/**/*.servertest.ts", "web/src/**/*.servertest.tsx"]
+						exclude: [
+							"web/src/__e2e__/**",
 							"web/src/__tests__/server/annotation-queue-assignments-api.servertest.ts",
 							"web/src/__tests__/server/annotation-queues-api.servertest.ts",
 							"web/src/__tests__/server/blob-storage-integration-api.servertest.ts",
@@ -433,31 +420,66 @@ pipeline: {
 							"web/src/__tests__/server/sessions.servertest.ts",
 							"web/src/__tests__/server/slack-integration.servertest.ts",
 						]
-						reason: "HTTP API calls (makeAPICall/makeZodVerifiedAPICall/fetch localhost:3000) and background worker daemon consumers (prompts-trpc, code-eval-test-run-trpc) require a running Next.js + worker server"
-					},
-				]
-			}
-			jobs: {
-				lint: {
-					services: false
-					resources: {
-						cpus:      2
-						memory_mb: 7680
-					}
-					needs: ["@repo/eslint-plugin:build", "@langfuse/icons:build", "@langfuse/shared:build"]
-					tasks: [{command: "pnpm --filter web run lint"}]
-				}
-				typecheck: {
-					services: false
-					needs:    ["@langfuse/icons:build", "@langfuse/shared:build"]
-					tasks: [{command: "pnpm --filter web run typecheck"}]
-				}
-				test: {
-					name:  "run web Vitest client and server suites"
-					needs: ["@langfuse/icons:build", "@langfuse/shared:build"]
-					resources: {
-						cpus:      2
-						memory_mb: 5120
+						incidental_reads: ["worker/package.json", "worker/tsconfig.json"]
+						not_run: [
+							{
+								tests: ["web/src/__e2e__/**"]
+								reason: "browser and full-stack e2e suites require running Next.js + ClickHouse + Playwright"
+							},
+							{
+								tests: [
+									"web/src/__tests__/server/annotation-queue-assignments-api.servertest.ts",
+									"web/src/__tests__/server/annotation-queues-api.servertest.ts",
+									"web/src/__tests__/server/blob-storage-integration-api.servertest.ts",
+									"web/src/__tests__/server/blob-storage-integration-status-api.servertest.ts",
+									"web/src/__tests__/server/comments-api.servertest.ts",
+									"web/src/__tests__/server/datasets-api.servertest.ts",
+									"web/src/__tests__/server/datasets-schema-validation.servertest.ts",
+									"web/src/__tests__/server/deprecation-signal.servertest.ts",
+									"web/src/__tests__/server/evaluation-rules-public-api.servertest.ts",
+									"web/src/__tests__/server/evaluator-history-public-api.servertest.ts",
+									"web/src/__tests__/server/evaluators-public-api.servertest.ts",
+									"web/src/__tests__/server/experiments-public-api.servertest.ts",
+									"web/src/__tests__/server/ingestion-api.servertest.ts",
+									"web/src/__tests__/server/llm-connections-api.servertest.ts",
+									"web/src/__tests__/server/memberships-api.servertest.ts",
+									"web/src/__tests__/server/metrics-api.servertest.ts",
+									"web/src/__tests__/server/metrics-v2-api.servertest.ts",
+									"web/src/__tests__/server/model-definitions.servertest.ts",
+									"web/src/__tests__/server/model-pricing-tiers.servertest.ts",
+									"web/src/__tests__/server/multilingual-fulltext-search.servertest.ts",
+									"web/src/__tests__/server/observation-api.servertest.ts",
+									"web/src/__tests__/server/observations-api-v2.servertest.ts",
+									"web/src/__tests__/server/observations-api.servertest.ts",
+									"web/src/__tests__/server/org-model-definitions.servertest.ts",
+									"web/src/__tests__/server/organization-llm-connections-api.servertest.ts",
+									"web/src/__tests__/server/organizations-api.servertest.ts",
+									"web/src/__tests__/server/otel-api.servertest.ts",
+									"web/src/__tests__/server/projects-api.servertest.ts",
+									"web/src/__tests__/server/prompts.v1.servertest.ts",
+									"web/src/__tests__/server/prompts.v2.servertest.ts",
+									"web/src/__tests__/server/scim-api.servertest.ts",
+									"web/src/__tests__/server/score-configs.servertest.ts",
+									"web/src/__tests__/server/scores-api-v1.servertest.ts",
+									"web/src/__tests__/server/scores-api-v3.servertest.ts",
+									"web/src/__tests__/server/skill-file-contents.servertest.ts",
+									"web/src/__tests__/server/traces-api.servertest.ts",
+									"web/src/__tests__/server/unstable-dashboard-widgets-api.servertest.ts",
+									"web/src/__tests__/server/unstable-dashboards-api.servertest.ts",
+									"web/src/__tests__/server/code-eval-test-run-trpc.servertest.ts",
+									"web/src/__tests__/server/daily-metrics-api.servertest.ts",
+									"web/src/__tests__/server/mcp-apps-widget-page.servertest.ts",
+									"web/src/__tests__/server/mcp-auth.servertest.ts",
+									"web/src/__tests__/server/media.servertest.ts",
+									"web/src/__tests__/server/prompts-trpc.servertest.ts",
+									"web/src/__tests__/server/scores-api-v2.servertest.ts",
+									"web/src/__tests__/server/sessions-api.servertest.ts",
+									"web/src/__tests__/server/sessions.servertest.ts",
+									"web/src/__tests__/server/slack-integration.servertest.ts",
+								]
+								reason: "HTTP API calls (makeAPICall/makeZodVerifiedAPICall/fetch localhost:3000) and background worker daemon consumers (prompts-trpc, code-eval-test-run-trpc) require a running Next.js + worker server"
+							},
+						]
 					}
 					tasks: [
 						{
@@ -466,8 +488,8 @@ pipeline: {
 							timeout: "5m"
 						},
 						{
-							name:    "Run web Vitest client and server suites"
-							command: "\"$ENACT_EXE\" helper vitest --route '**/*.clienttest.*=vitest.client.config.mts' --route '**/*.servertest.*=vitest.server.config.mts' {relative_targets}"
+							name:    "Run web Vitest server suite"
+							command: "\"$ENACT_EXE\" helper vitest --config vitest.server.config.mts --arg=--project --arg=server --arg=--project --arg=server-isolated --arg=--project --arg=server-shared-source --arg=--project --arg=server-unit --arg=--project --arg=server-shared-source-unit --arg=--project --arg=e2e-server {relative_targets}"
 							timeout: "30m"
 							unset_env: ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_ENDPOINT_URL"]
 							env: {
@@ -478,7 +500,7 @@ pipeline: {
 								"SALT":                                          "salt"
 								"NEXTAUTH_SECRET":                               "secret"
 								"NEXTAUTH_URL":                                  "http://localhost:3000"
-								"VITEST_MAX_WORKERS":                            "2"
+								"VITEST_MAX_WORKERS":                            "3"
 								"LANGFUSE_EE_LICENSE_KEY":                       "langfuse_ee_test"
 								"LANGFUSE_CACHE_PROMPT_ENABLED":                 "false"
 								"LANGFUSE_INGESTION_QUEUE_DELAY_MS":             "1"
@@ -525,25 +547,18 @@ pipeline: {
 					reason: "upstream pipeline runs test:exclude-llm-connections; live LLM provider tests run separately"
 				}]
 			}
-			// from: pipeline.yml › tests-worker › Build
-			build: {
-				name: "Build"
-				command: "pnpm --filter=worker... run build"
-				timeout: "20m"
-				env: {
-					"GOLANG_MIGRATE_VERSION": "v4.19.1"
-					"NODE_ENV": "test"
-					"NODE_VERSION": "24"
-					"LANGFUSE_S3_EVENT_UPLOAD_BUCKET": "langfuse"
-					"ENCRYPTION_KEY": "0000000000000000000000000000000000000000000000000000000000000000"
-					"SALT": "salt"
-					"NEXTAUTH_SECRET": "secret"
-					"NEXTAUTH_URL": "http://localhost:3000"
-					"VITEST_MAX_WORKERS": "8"
-				}
-			}
-			// from: pipeline.yml › tests-worker › run tests
+			// from: pipeline.yml › tests-worker › Build + run tests
 			jobs: {
+				build: {
+					name:     "Build worker"
+					services: false
+					builds:   true
+					needs:    ["@langfuse/native:build", "@langfuse/shared:build", "@repo/eslint-plugin:build"]
+					tasks: [{
+						command: "pnpm --filter worker run build"
+						timeout: "15m"
+					}]
+				}
 				lint: {
 					services: false
 					needs:    ["@repo/eslint-plugin:build", "@langfuse/shared:build", "@langfuse/native:build"]
@@ -560,7 +575,7 @@ pipeline: {
 						cpus:      2
 						memory_mb: 5120
 					}
-					needs: ["@langfuse/shared:build", "@langfuse/native:build"]
+					needs: ["@repo/eslint-plugin:build", "@langfuse/shared:build", "@langfuse/native:build"]
 					tasks: [
 						{
 							name:    "Prepare databases, seed data, and S3 bucket"
@@ -581,7 +596,7 @@ pipeline: {
 								"SALT":                            "salt"
 								"NEXTAUTH_SECRET":                 "secret"
 								"NEXTAUTH_URL":                    "http://localhost:3000"
-								"VITEST_MAX_WORKERS":              "2"
+								"VITEST_MAX_WORKERS":              "3"
 							}
 						},
 					]
