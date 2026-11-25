@@ -7,10 +7,11 @@ import {
 } from "@langfuse/shared/src/server";
 import { getDeterministicSamplingValue } from "../../evaluation/deterministicSampling";
 import { ClickhouseWriter } from "../../../services/ClickhouseWriter";
+import { classifyJobFailure } from "../../../queues/jobFailureReason";
 import { processRustOtelEvents } from "../processRustOtelEvents";
 import { effectDifferences, ShadowScope } from "./context";
 import { otelProcessingHooks } from "../processingHooks";
-import { shadowJobId, shadowRowKey } from "./rowKey";
+import { shadowJobId, shadowRowKey, shadowSourceFile } from "./rowKey";
 import { enqueueShadowRows, flushShadowRows } from "./verifyRows";
 import { closeShadowWriter, getShadowWriter } from "./writer";
 
@@ -84,10 +85,15 @@ export type PrimaryStage =
 export function submitSample(sample: Sample, failure?: PrimaryStage) {
   const task = otelProcessingHooks
     .exit(() => compare(sample, failure))
-    .catch(() => {
+    .catch((error: unknown) => {
       logger.warn("OTEL shadow comparison failed", {
         projectId: sample.context.projectId,
         jobId: sample.jobId,
+        sourceFile: shadowSourceFile(
+          sample.context.projectId,
+          sample.context.fileKey,
+        ),
+        reason: shadowFailureReason(error),
       });
       recordIncrement(prefix + "batch", 1, { outcome: "error" });
     });
@@ -99,11 +105,17 @@ export function submitSample(sample: Sample, failure?: PrimaryStage) {
   task.then(cleanup, cleanup);
 }
 
-function finish(scope: ShadowScope, started: number, failure?: string) {
+function finish(
+  scope: ShadowScope,
+  started: number,
+  failure?: string,
+  reason?: string,
+) {
   const accepted = scope.rows.length > 0 ? "enqueued" : "empty";
   return {
     outcome: failure ? "exception" : accepted,
     stage: failure ?? "none",
+    reason,
     processingMs: performance.now() - started,
     scope,
   };
@@ -123,31 +135,71 @@ async function compare(sample: Sample, failure?: PrimaryStage) {
   report(sample, primary, native, differentEnqueues);
 }
 
+// Native errors can include the span ID, field value or media reference in the
+// message. Only stable codes and known failure categories go in the report.
+const nativeErrorCodes = new Set([
+  "ERR_NATIVE_PANIC",
+  "ERR_OTEL_CLOSED",
+  "ERR_OTEL_INTERNAL",
+  "ERR_OTEL_INVALID_JSON",
+  "ERR_OTEL_JSON_CONSUMED",
+  "ERR_OTEL_MEDIA_DECODE",
+  "ERR_OTEL_MEDIA_INDEX",
+  "ERR_OTEL_PROCESSING",
+]);
+
+function shadowFailureReason(error: unknown) {
+  if (error instanceof Error) {
+    if (error.message === "Native OTEL writer unavailable")
+      return "native_writer_unavailable";
+    if (
+      "code" in error &&
+      typeof error.code === "string" &&
+      nativeErrorCodes.has(error.code)
+    ) {
+      if (
+        error.code === "ERR_OTEL_PROCESSING" &&
+        error.message.startsWith("cannot finalize OTEL event ")
+      )
+        return "row_finalization";
+      return error.code;
+    }
+  }
+  return classifyJobFailure(error);
+}
+
 async function runNative(sample: Sample) {
   const scope = new ShadowScope("native", sample.primary.effects);
   const started = performance.now();
   let stage: string | undefined = "shadow_prepare";
+  let reason: string | undefined;
   await withCustomerDataLoggingSuppressed(async () => {
+    let batch: Awaited<ReturnType<typeof prepareOtelJson>> | undefined;
     try {
-      const batch = await prepareOtelJson(sample.bytes, sample.extractMedia);
+      batch = await prepareOtelJson(sample.bytes, sample.extractMedia);
       stage = "shadow_process";
-      try {
-        await processRustOtelEvents({
-          batch,
-          context: { ...sample.context, suppressLogging: true },
-          getWriter: getShadowWriter,
-          writes: scope,
-        });
-        stage = "shadow_dispose";
-      } finally {
-        await batch.dispose();
-      }
+      await processRustOtelEvents({
+        batch,
+        context: { ...sample.context, suppressLogging: true },
+        getWriter: getShadowWriter,
+        writes: scope,
+      });
       stage = undefined;
-    } catch {
-      // Keep customer payloads out of diagnostics; the stage is sufficient.
+    } catch (error) {
+      reason = shadowFailureReason(error);
+    } finally {
+      try {
+        await batch?.dispose();
+      } catch (error) {
+        if (stage) scope.fail("shadow_dispose");
+        else {
+          stage = "shadow_dispose";
+          reason = shadowFailureReason(error);
+        }
+      }
     }
   });
-  return finish(scope, started, stage);
+  return finish(scope, started, stage, reason);
 }
 
 type Result = ReturnType<typeof finish>;
@@ -180,6 +232,7 @@ function report(
     shadow_error_stage: native.stage,
     write_mode: sample.writeMode,
     primary_media_path: sample.mediaPath,
+    primary_effects: primary.scope.attemptedPrimaryEffect ? "some" : "none",
     media_extraction: sample.extractMedia ? "enabled" : "disabled",
   };
   recordIncrement(prefix + "pair", 1, tags);
@@ -212,6 +265,11 @@ function report(
     ...tags,
     jobId: sample.jobId,
     projectId: sample.context.projectId,
+    sourceFile: shadowSourceFile(
+      sample.context.projectId,
+      sample.context.fileKey,
+    ),
+    shadow_failure_reason: native.reason,
     primaryEnqueued: primary.scope.rows.length,
     shadowEnqueued: native.scope.rows.length,
     differentEnqueues,

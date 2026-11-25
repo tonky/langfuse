@@ -3226,14 +3226,14 @@ describe(
       },
     );
 
-    function replay(mode: "original-ts" | "early-rust") {
+    function replay(mode: "original-ts" | "early-rust", fileKey = FILE_KEY) {
       return runOneOtelReplay({
         mode,
         bytes: Buffer.from(
           JSON.stringify(buildResourceSpans({ repeatImage: true })),
         ),
         projectId: PROJECT_ID,
-        fileKey: FILE_KEY,
+        fileKey,
         mediaUploadEnabled: true,
         overflowEnabled: true,
         overflowSizeLimitBytes: 256,
@@ -3374,6 +3374,8 @@ describe(
           "OTEL shadow batch differs or is incomplete",
           expect.objectContaining({
             comparison: "shadow_only_failure",
+            shadow_failure_reason: "native_writer_unavailable",
+            primary_effects: "some",
             primaryEnqueued: 2,
             shadowEnqueued: 0,
             differentEnqueues: expect.arrayContaining([
@@ -3392,6 +3394,46 @@ describe(
       }
     });
 
+    it("locates an empty failed replay without exposing its exception or storage prefix", async () => {
+      const sourceFile =
+        "2026/11/25/13/07/5388bc1a-65af-4d90-866b-d6d942b50e87.json";
+      const primary = vi
+        .spyOn(sharedServer.OtelIngestionProcessor.prototype, "processToEvent")
+        .mockReturnValueOnce([]);
+      const native = vi
+        .spyOn(nativeProcessor, "processRustOtelEvents")
+        .mockRejectedValueOnce(
+          Object.assign(
+            new Error("cannot finalize OTEL event secret-span: secret-field"),
+            { code: "ERR_OTEL_PROCESSING" },
+          ),
+        );
+      const reports = vi.spyOn(sharedServer.logger, "info");
+      try {
+        await replay(
+          "original-ts",
+          `secret-prefix/otel/${PROJECT_ID}/${sourceFile}`,
+        );
+        const report = reports.mock.calls.find(
+          ([message]) =>
+            message === "OTEL shadow batch differs or is incomplete",
+        );
+        expect(report?.[1]).toMatchObject({
+          comparison: "shadow_only_failure",
+          shadow_error_stage: "shadow_process",
+          shadow_failure_reason: "row_finalization",
+          sourceFile,
+          primary_effects: "none",
+          batchRowKeys: [],
+        });
+        expect(JSON.stringify(report)).not.toContain("secret-");
+      } finally {
+        reports.mockRestore();
+        native.mockRestore();
+        primary.mockRestore();
+      }
+    });
+
     it("preserves a primary exception during sampled replay", async () => {
       const failure = new Error("synthetic TypeScript processing failure");
       const reports = vi.spyOn(sharedServer.logger, "info");
@@ -3406,7 +3448,10 @@ describe(
         });
         expect(reports).toHaveBeenCalledWith(
           "OTEL shadow batch differs or is incomplete",
-          expect.objectContaining({ comparison: "primary_only_failure" }),
+          expect.objectContaining({
+            comparison: "primary_only_failure",
+            primary_effects: "none",
+          }),
         );
       } finally {
         reports.mockRestore();

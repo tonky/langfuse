@@ -13,6 +13,10 @@ import {
   clampDecimal64Value,
   truncateOversizedRecord,
 } from "./jsonRecords";
+import {
+  closeShadowWriter,
+  getShadowWriter,
+} from "../../features/otel-ingestion/shadow/writer";
 
 const { encodeClickhouseEventsMock } = vi.hoisted(() => ({
   encodeClickhouseEventsMock: vi.fn(),
@@ -85,6 +89,7 @@ describe("ClickhouseWriter", () => {
   });
 
   afterEach(async () => {
+    await closeShadowWriter();
     vi.useRealTimers();
 
     await ClickhouseWriter.shutdownAll();
@@ -911,6 +916,40 @@ describe("ClickhouseWriter", () => {
         format: "native",
       },
     );
+  });
+
+  it("tags a failed shadow flush with its destination", async () => {
+    const mockExec = vi
+      .spyOn(clickhouseClientMock, "exec")
+      .mockRejectedValue(new Error("permanent insert error"));
+    const shadowWriter = getShadowWriter(clickhouseClientMock);
+    const expectedFailureTags = {
+      entity_type: "events_native_test",
+      format: "native-test",
+      reason: "other",
+    };
+    shadowWriter.maxAttempts = 1;
+
+    shadowWriter.addToQueue(TableName.EventsFull, preparedEvent("shadow-1"));
+    await shadowWriter["flushAll"](true);
+
+    expect(mockExec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: "INSERT INTO events_native_test FORMAT Native",
+        clickhouse_settings: expect.objectContaining({ log_queries: 0 }),
+      }),
+    );
+    for (const metric of [
+      "langfuse.queue.clickhouse_writer.error",
+      "langfuse.queue.clickhouse_writer.rows_dropped",
+    ]) {
+      expect(serverExports.recordIncrement).toHaveBeenCalledWith(
+        metric,
+        1,
+        expectedFailureTags,
+      );
+    }
+    expect(shadowWriter.queue[TableName.EventsFull]).toHaveLength(0);
   });
 
   it("should handle different types of Clickhouse client errors", async () => {

@@ -28,11 +28,27 @@ export function shadowRowKey(projectId: string, row: OtelShadowRowLocator) {
   };
 }
 
+const generatedUuid =
+  /^[a-f\d]{8}-[a-f\d]{4}-4[a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12}$/i;
+
 // Queue-generated job IDs use UUIDv4. Exclude free-form job labels.
 export function shadowJobId(id: string): string | undefined {
-  return /^[a-f\d]{8}-[a-f\d]{4}-4[a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12}$/i.test(
-    id,
-  )
-    ? id
-    : undefined;
+  return generatedUuid.test(id) ? id : undefined;
+}
+
+/** Only the time path and generated file ID are needed to locate a batch in the project's OTEL prefix. */
+export function shadowSourceFile(
+  projectId: string,
+  fileKey: string,
+): string | undefined {
+  const match = /(\d{4}\/\d\d\/\d\d\/\d\d\/\d\d\/([a-f\d-]{36})\.json)$/i.exec(
+    fileKey,
+  );
+  if (
+    match &&
+    generatedUuid.test(match[2]) &&
+    fileKey.endsWith(`otel/${projectId}/${match[1]}`)
+  ) {
+    return match[1];
+  }
 }

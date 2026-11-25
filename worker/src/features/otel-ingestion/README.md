@@ -92,13 +92,14 @@ Each processor records the row keys its writer accepted. After replay, the worke
 
 Metrics use the prefix `langfuse.ingestion.otel.shadow.`.
 
-- `pair` reports each processor’s outcome (enqueued rows, empty batch or exception) and the stage that failed. The discrepancy log includes enqueue counts, handled failures by stage and up to three row keys.
+- `pair` reports each processor’s outcome (enqueued rows, empty batch or exception) and the stage that failed. The discrepancy log includes enqueue counts, handled failures by stage and up to three row keys. For a shadow exception, `shadow_failure_reason` identifies a known native error code or failure category. Raw exception messages can contain span IDs and field values.
 - The same log counts missing and extra service requests by kind. For an evaluation that matches, this includes the observation snapshot, execution record and queue request. For trace dispatch it compares trace IDs, start times and selected rules. Each path uses its own size estimate. Failed attempts count, so check the failure stages before attributing later missing requests.
 - The worker groups row checks by 64 MiB of sampled input and checks smaller groups after 30 seconds. One indexed query reads both tables for up to 64 keys. If an enqueued row is still missing, the worker checks that key once more after 30 seconds. A missing result means the row was absent at the final read. A later insert can still succeed. Graceful shutdown flushes the writers before the final check.
 - When both rows are visible, the verifier compares every column except the three write-time clocks. Mismatch reports identify the row and changed columns, including maps that differ only in key order. They omit field values.
-- Compare `paired_processing_duration_ms` for successful events-only batches with the same primary media path. Both implementations use their production enrichment services and caches. Rust runs second and can benefit from caches warmed by TypeScript. The measurement excludes the buffered writer wait. Only TypeScript waits for real uploads and dispatches.
+- For asynchronous shadow insert failures, filter `langfuse.queue.clickhouse_writer.rows_dropped` by `entity_type:events_native_test` and `format:native-test`. A batch can finish processing before the writer exhausts its insert retries.
+- Compare `paired_processing_duration_ms` for successful events-only batches with the same primary media path. Filter on `primary_effects:none` to select batches where TypeScript attempted no captured media, evaluation or trace-dispatch writes. Both paths can still perform enrichment reads, and Rust can benefit from caches warmed by TypeScript. The measurement excludes the buffered writer wait.
 
-Use a reported key in an authorized ClickHouse session to locate the original file. Query the side that stored the row and omit the span predicate if the example has no span ID. Multiple deliveries can return several file paths.
+For standard OTEL files, the discrepancy log includes `sourceFile` even when both writers enqueued zero rows. Resolve it under `<event upload prefix>otel/<projectId>/` in the event bucket. For other file layouts, use a reported row key in an authorized ClickHouse session. Query the side that stored the row and omit the span predicate if the example has no span ID. Multiple deliveries can return several file paths.
 
 ```sql
 SELECT DISTINCT blob_storage_file_path

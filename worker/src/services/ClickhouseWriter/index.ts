@@ -293,6 +293,7 @@ export class ClickhouseWriter<
   private async flush<T extends TableName>(tableName: T, fullQueue = false) {
     const entityQueue = this.queue[tableName];
     if (entityQueue.length === 0) return;
+    const metricEntityType = this.strategyFactory.metricEntityType ?? tableName;
 
     let queueItems = entityQueue.splice(
       0,
@@ -312,7 +313,7 @@ export class ClickhouseWriter<
         "langfuse.queue.clickhouse_writer.time_distribution",
         waitTime,
         {
-          entity_type: tableName,
+          entity_type: metricEntityType,
           type: "wait",
           attempt: item.requeued ? "retry" : "first",
           format: this.strategyFactory.format,
@@ -324,7 +325,7 @@ export class ClickhouseWriter<
     const currentSpan = getCurrentSpan();
     if (currentSpan) {
       currentSpan.setAttributes({
-        [`${tableName}-length`]: queueItems.length,
+        [`${metricEntityType}-length`]: queueItems.length,
       });
     }
 
@@ -458,7 +459,7 @@ export class ClickhouseWriter<
         "langfuse.queue.clickhouse_writer.time_distribution",
         processingTime,
         {
-          entity_type: tableName,
+          entity_type: metricEntityType,
           type: "processing",
           format: this.strategyFactory.format,
           unit: "milliseconds",
@@ -475,7 +476,7 @@ export class ClickhouseWriter<
         {
           format: this.strategyFactory.format,
           unit: "records",
-          entityType: tableName,
+          entityType: metricEntityType,
         },
       );
     } catch (err) {
@@ -500,6 +501,7 @@ export class ClickhouseWriter<
         } else {
           // TODO - Add to a dead letter queue in Redis rather than dropping
           recordIncrement("langfuse.queue.clickhouse_writer.error", 1, {
+            entity_type: metricEntityType,
             format: this.strategyFactory.format,
             reason,
           });
@@ -512,7 +514,7 @@ export class ClickhouseWriter<
           "langfuse.queue.clickhouse_writer.rows_dropped",
           droppedCount,
           {
-            entity_type: tableName,
+            entity_type: metricEntityType,
             format: this.strategyFactory.format,
             reason,
           },

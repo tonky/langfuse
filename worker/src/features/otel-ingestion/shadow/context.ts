@@ -17,6 +17,7 @@ export class ShadowScope implements OtelProcessingHooks {
   readonly recordIngestionMetrics;
   readonly onFailure = (stage: string) => this.fail(stage);
   readonly failures: Record<string, number> = {};
+  attemptedPrimaryEffect = false;
   readonly rows: OtelShadowRowLocator[] = [];
   readonly onRowEnqueued = (row: OtelShadowRowLocator) => {
     this.rows.push(row);
@@ -54,6 +55,7 @@ export class ShadowScope implements OtelProcessingHooks {
   ): Promise<T> {
     const occurrence = this.occurrence(kind, identity);
     if (this.side === "primary") {
+      this.attemptedPrimaryEffect = true;
       try {
         const value = await run();
         if (occurrence) occurrence.entry.results[occurrence.index] = { value };
