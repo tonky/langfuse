@@ -136,3 +136,7 @@ ds-bundle/
 
 # local redis snapshots
 dump.rdb
+
+# Enact developer overrides and execution traces
+*.user.cue
+.enve/
