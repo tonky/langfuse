@@ -163,16 +163,8 @@ export const traceException = (
 ) => {
   const activeSpan = span ?? getCurrentSpan();
 
-  if (!activeSpan) {
+  if (!activeSpan || isCustomerDataLoggingSuppressed()) {
     return;
-  }
-
-  if (isCustomerDataLoggingSuppressed()) {
-    ex = Object.assign(new Error("customer data suppressed"), {
-      name: "CustomerDataSuppressedError",
-      stack: undefined,
-    });
-    code = "customer_data_suppressed";
   }
 
   const exception = {

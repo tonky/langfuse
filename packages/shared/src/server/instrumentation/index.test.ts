@@ -185,29 +185,23 @@ describe("instrumentation baggage propagation", () => {
     );
   });
 
-  it("redacts exception details while customer-data logging is suppressed", async () => {
+  it("leaves the inherited span untouched when exception reporting is suppressed", async () => {
     const span = {
       recordException: vi.fn(),
       setAttributes: vi.fn(),
       setStatus: vi.fn(),
     } as unknown as Span;
 
-    await withCustomerDataLoggingSuppressed(async () => {
-      await Promise.resolve();
-      traceException(new Error("customer-controlled error"), span);
-    });
+    await context.with(trace.setSpan(ROOT_CONTEXT, span), () =>
+      withCustomerDataLoggingSuppressed(async () => {
+        await Promise.resolve();
+        traceException(new Error("customer-controlled error"));
+      }),
+    );
 
-    expect(span.recordException).toHaveBeenCalledWith({
-      code: "customer_data_suppressed",
-      message: "customer data suppressed",
-      name: "CustomerDataSuppressedError",
-      stack: undefined,
-    });
-    expect(span.setAttributes).toHaveBeenCalledWith({
-      "error.stack": undefined,
-      "error.message": "customer data suppressed",
-      "error.type": "CustomerDataSuppressedError",
-    });
+    expect(span.recordException).not.toHaveBeenCalled();
+    expect(span.setAttributes).not.toHaveBeenCalled();
+    expect(span.setStatus).not.toHaveBeenCalled();
   });
 
   it("does not consult the process tracer provider while suppressed", () => {
