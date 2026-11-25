@@ -272,3 +272,14 @@ regenerated outputs. Never hand-edit `generated/**`.
 - Generated provider config and shim outputs under `.claude/`, `.cursor/`,
   `.codex/`, `.vscode/`, or `.mcp.json` are local artifacts, not source of
   truth files.
+
+## enact & enve Agent Execution Guidelines
+- `enact` calls `enve` under the hood: invoke `enact` directly (e.g. `enact run`, `enact plan`, `enact ci matrix`, `enact runs`, `enact reach`, `enact check`). Do NOT wrap `enact` in `enve run -- enact`.
+- Run repository build tools, package managers, compilers, and test runners managed by `enve.cue` via `enve run -- <cmd>` (or `just <recipe>` when the Justfile wraps `enve run`).
+- In generated workflows, all repository scripts and toolchains execute through `$RUN_PREFIX` (`enve run`).
+- Never use Docker or container runtimes for microservices; run them rootless in user space via `enve`.
+- In a fresh repo, discover capabilities via `enact handbook all`, `enact agent schema`, and `enve agent schema`.
+- Before making changes or running tests, preview the plan with `enact plan`.
+- Verify affected components and CI matrix with `enact ci matrix`.
+- Inspect execution traces and debug bottlenecks with `enact runs inspect <run-id>`.
+- Before pushing to CI, run `enact check`.
