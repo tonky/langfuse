@@ -27,17 +27,50 @@ export { TableName } from "./types";
 
 const MULTI_PROJECT_LOG_COMMENT_PROJECT_ID = "MULTI_PROJECT";
 
+function clickhouseErrorCode(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") return undefined;
+
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "number" && Number.isSafeInteger(code)
+    ? code
+    : undefined;
+}
+
+function errorContext(error: unknown) {
+  const errorCode = clickhouseErrorCode(error);
+  return {
+    reason: classifyJobFailure(error),
+    ...(errorCode === undefined ? {} : { errorCode }),
+  };
+}
+
+type DroppedIdentity = {
+  project_id: string;
+  trace_id: string | null | undefined;
+  id: string;
+};
+
+function safeDroppedIdentity(identity: DroppedIdentity) {
+  const isOtelId = (value: unknown): value is string =>
+    typeof value === "string" && /^(?:[0-9a-f]{16}|[0-9a-f]{32})$/i.test(value);
+
+  return {
+    project_id: identity.project_id,
+    ...(isOtelId(identity.trace_id) ? { trace_id: identity.trace_id } : {}),
+    ...(isOtelId(identity.id) ? { id: identity.id } : {}),
+  };
+}
+
 function isRetryableClickhouseInsertError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
 
-  const errorMessage = (error as Error).message?.toLowerCase() || "";
+  const message = (error as Error).message?.toLowerCase() || "";
 
   // Socket hang up and client-side request timeouts ("Timeout error." from
   // @clickhouse/client when request_timeout elapses) are transient: a retry
   // opens a fresh connection that can land on a healthy replica.
   return (
-    errorMessage.includes("socket hang up") ||
-    errorMessage.includes("timeout error")
+    message.includes("socket hang up") || message.includes("timeout error")
   );
 }
 
@@ -201,10 +234,10 @@ export class ClickhouseWriter<
           await Promise.all(
             tables.map((table) => this.flush(table, fullQueue)),
           ).catch((err) => {
-            this.logger.error(
-              `${this.logPrefix}ClickhouseWriter.flushAll`,
-              err,
-            );
+            this.logger.error(`${this.logPrefix}ClickhouseWriter.flushAll`, {
+              format: this.strategyFactory.format,
+              ...errorContext(err),
+            });
           });
         },
       ),
@@ -223,23 +256,23 @@ export class ClickhouseWriter<
   private isSizeError(error: unknown): boolean {
     if (!error || typeof error !== "object") return false;
 
-    const errorMessage = (error as Error).message?.toLowerCase() || "";
+    const message = (error as Error).message?.toLowerCase() || "";
 
     return (
       // Check for ClickHouse size errors
-      errorMessage.includes("size of json object") &&
-      errorMessage.includes("extremely large") &&
-      errorMessage.includes("expected not greater than")
+      message.includes("size of json object") &&
+      message.includes("extremely large") &&
+      message.includes("expected not greater than")
     );
   }
 
   private isStringLengthError(error: unknown): boolean {
     if (!error || typeof error !== "object") return false;
 
-    const errorMessage = (error as Error).message?.toLowerCase() || "";
+    const message = (error as Error).message?.toLowerCase() || "";
 
     // Node.js string size errors
-    return errorMessage.includes("invalid string length");
+    return message.includes("invalid string length");
   }
 
   /**
@@ -253,7 +286,6 @@ export class ClickhouseWriter<
     tableName: T,
     queueItems: ClickhouseWriterQueueItem<PayloadMap[T]>[],
     truncate: (table: TableName, row: PayloadMap[T]) => PayloadMap[T],
-    strategy: ClickhouseWriteStrategy<PayloadMap[TableName]>,
   ): {
     retryItems: ClickhouseWriterQueueItem<PayloadMap[T]>[];
     requeueItems: ClickhouseWriterQueueItem<PayloadMap[T]>[];
@@ -264,9 +296,7 @@ export class ClickhouseWriter<
       const truncatedRecord = truncate(tableName, record);
       this.logger.warn(
         `${this.logPrefix}String length error with single record for ${tableName}, falling back to truncation`,
-        {
-          recordId: strategy.droppedId(record).id,
-        },
+        { table: tableName },
       );
       return {
         retryItems: [
@@ -293,7 +323,12 @@ export class ClickhouseWriter<
   private async flush<T extends TableName>(tableName: T, fullQueue = false) {
     const entityQueue = this.queue[tableName];
     if (entityQueue.length === 0) return;
-    const metricEntityType = this.strategyFactory.metricEntityType ?? tableName;
+    const destinationTable = this.strategyFactory.destinationTable ?? tableName;
+    const logContext = {
+      format: this.strategyFactory.format,
+      table: tableName,
+      destination: destinationTable,
+    };
 
     let queueItems = entityQueue.splice(
       0,
@@ -313,7 +348,7 @@ export class ClickhouseWriter<
         "langfuse.queue.clickhouse_writer.time_distribution",
         waitTime,
         {
-          entity_type: metricEntityType,
+          entity_type: destinationTable,
           type: "wait",
           attempt: item.requeued ? "retry" : "first",
           format: this.strategyFactory.format,
@@ -325,7 +360,7 @@ export class ClickhouseWriter<
     const currentSpan = getCurrentSpan();
     if (currentSpan) {
       currentSpan.setAttributes({
-        [`${metricEntityType}-length`]: queueItems.length,
+        [`${destinationTable}-length`]: queueItems.length,
       });
     }
 
@@ -343,7 +378,8 @@ export class ClickhouseWriter<
       await backOff(
         async () =>
           this.writeToClickhouse({
-            table: tableName,
+            logicalTable: tableName,
+            destinationTable,
             records: recordsToWrite,
             strategy: writeStrategy,
           }),
@@ -353,25 +389,28 @@ export class ClickhouseWriter<
             const isRetryable = isRetryableClickhouseInsertError(error);
             const isSizeError = this.isSizeError(error);
             const isStringLengthError = this.isStringLengthError(error);
+            const failureContext = errorContext(error);
 
             if (isRetryable) {
               this.logger.warn(
-                `${this.logPrefix}ClickHouse Writer failed with retryable error for ${tableName} (attempt ${attemptNumber}/${env.LANGFUSE_INGESTION_CLICKHOUSE_MAX_ATTEMPTS}): ${error.message}`,
+                `${this.logPrefix}ClickHouse Writer failed with retryable error for ${tableName} (attempt ${attemptNumber}/${env.LANGFUSE_INGESTION_CLICKHOUSE_MAX_ATTEMPTS})`,
                 {
-                  error: error.message,
+                  ...logContext,
+                  ...failureContext,
                   attemptNumber,
                 },
               );
               currentSpan?.addEvent("clickhouse-query-retry", {
                 "retry.attempt": attemptNumber,
-                "retry.error": error.message,
+                "retry.error": failureContext.reason,
               });
               return true;
             } else if (isStringLengthError && truncate) {
               this.logger.warn(
                 `${this.logPrefix}ClickHouse Writer failed with string length error for ${tableName} (attempt ${attemptNumber}/${env.LANGFUSE_INGESTION_CLICKHOUSE_MAX_ATTEMPTS}): Splitting batch and retrying`,
                 {
-                  error: error.message,
+                  ...logContext,
+                  ...failureContext,
                   attemptNumber,
                   batchSize: queueItems.length,
                 },
@@ -381,7 +420,6 @@ export class ClickhouseWriter<
                 tableName,
                 queueItems,
                 truncate,
-                writeStrategy,
               );
 
               // Update records to write with only the retry items
@@ -402,7 +440,7 @@ export class ClickhouseWriter<
 
               currentSpan?.addEvent("clickhouse-query-split-retry", {
                 "retry.attempt": attemptNumber,
-                "retry.error": error.message,
+                "retry.error": failureContext.reason,
                 "split.retry_count": retryItems.length,
                 "split.requeue_count": requeueItems.length,
               });
@@ -411,7 +449,8 @@ export class ClickhouseWriter<
               this.logger.warn(
                 `${this.logPrefix}ClickHouse Writer failed with size error for ${tableName} (attempt ${attemptNumber}/${env.LANGFUSE_INGESTION_CLICKHOUSE_MAX_ATTEMPTS}): Truncating oversized records and retrying`,
                 {
-                  error: error.message,
+                  ...logContext,
+                  ...failureContext,
                   attemptNumber,
                 },
               );
@@ -424,16 +463,17 @@ export class ClickhouseWriter<
 
               currentSpan?.addEvent("clickhouse-query-truncate-retry", {
                 "retry.attempt": attemptNumber,
-                "retry.error": error.message,
+                "retry.error": failureContext.reason,
                 truncated: true,
               });
               return true;
             }
 
             this.logger.error(
-              `${this.logPrefix}ClickHouse query failed with non-retryable error: ${error.message}`,
+              `${this.logPrefix}ClickHouse query failed with non-retryable error for ${tableName}`,
               {
-                error: error.message,
+                ...logContext,
+                ...failureContext,
               },
             );
             return false;
@@ -459,7 +499,7 @@ export class ClickhouseWriter<
         "langfuse.queue.clickhouse_writer.time_distribution",
         processingTime,
         {
-          entity_type: metricEntityType,
+          entity_type: destinationTable,
           type: "processing",
           format: this.strategyFactory.format,
           unit: "milliseconds",
@@ -476,16 +516,25 @@ export class ClickhouseWriter<
         {
           format: this.strategyFactory.format,
           unit: "records",
-          entityType: metricEntityType,
+          entityType: destinationTable,
         },
       );
     } catch (err) {
       this.logger.error(
         `${this.logPrefix}ClickhouseWriter.flush ${tableName}`,
-        err,
+        {
+          ...logContext,
+          ...errorContext(err),
+        },
       );
 
-      this.logRejectedRow(tableName, err, queueItems, writeStrategy);
+      this.logRejectedRow(
+        tableName,
+        destinationTable,
+        err,
+        queueItems,
+        writeStrategy,
+      );
 
       // Re-add the records to the queue with incremented attempts
       const reason = classifyJobFailure(err);
@@ -501,7 +550,7 @@ export class ClickhouseWriter<
         } else {
           // TODO - Add to a dead letter queue in Redis rather than dropping
           recordIncrement("langfuse.queue.clickhouse_writer.error", 1, {
-            entity_type: metricEntityType,
+            entity_type: destinationTable,
             format: this.strategyFactory.format,
             reason,
           });
@@ -514,7 +563,7 @@ export class ClickhouseWriter<
           "langfuse.queue.clickhouse_writer.rows_dropped",
           droppedCount,
           {
-            entity_type: metricEntityType,
+            entity_type: destinationTable,
             format: this.strategyFactory.format,
             reason,
           },
@@ -522,11 +571,13 @@ export class ClickhouseWriter<
 
         const droppedIds = queueItems
           .filter((item) => item.attempts >= this.maxAttempts)
-          .map((item) => writeStrategy.droppedId(item.data));
+          .map((item) =>
+            safeDroppedIdentity(writeStrategy.droppedId(item.data)),
+          );
 
         this.logger.error(
           `${this.logPrefix}ClickhouseWriter: Max attempts reached, dropped ${droppedCount} ${tableName} record(s)`,
-          { droppedIds },
+          { ...logContext, reason, droppedIds },
         );
       }
     }
@@ -535,6 +586,7 @@ export class ClickhouseWriter<
   /** Log the row a ClickHouse parse error names, so its S3 event file can be found. */
   private logRejectedRow<T extends TableName>(
     tableName: T,
+    destination: string,
     err: unknown,
     queueItems: ClickhouseWriterQueueItem<PayloadMap[T]>[],
     strategy: ClickhouseWriteStrategy<PayloadMap[TableName]>,
@@ -544,7 +596,9 @@ export class ClickhouseWriter<
     this.logger.error(
       `${this.logPrefix}ClickhouseWriter: ClickHouse rejected ${tableName} row`,
       {
-        ...strategy.droppedId(row),
+        format: this.strategyFactory.format,
+        destination,
+        ...safeDroppedIdentity(strategy.droppedId(row)),
         blobStorageFilePath:
           "blob_storage_file_path" in row
             ? row.blob_storage_file_path
@@ -576,14 +630,18 @@ export class ClickhouseWriter<
       this.trackActiveFlush(this.flush(tableName)).catch((err) => {
         this.logger.error(
           `${this.logPrefix}ClickhouseWriter.addToQueue flush`,
-          err,
+          {
+            format: this.strategyFactory.format,
+            ...errorContext(err),
+          },
         );
       });
     }
   }
 
   private async writeToClickhouse<T extends TableName>(params: {
-    table: T;
+    logicalTable: T;
+    destinationTable: string;
     records: PayloadMap[T][];
     strategy: ClickhouseWriteStrategy<PayloadMap[TableName]>;
   }): Promise<void> {
@@ -591,7 +649,7 @@ export class ClickhouseWriter<
 
     await params.strategy
       .write(this.client ?? clickhouseClient(), {
-        table: params.table,
+        table: params.destinationTable,
         records: params.records,
         clickhouse_settings: {
           log_comment: buildClickHouseLogComment({
@@ -599,11 +657,20 @@ export class ClickhouseWriter<
             route: "clickhouse-writer",
             projectId: MULTI_PROJECT_LOG_COMMENT_PROJECT_ID,
           }),
+          ...(this.strategyFactory.destinationTable !== undefined
+            ? { log_queries: 0 }
+            : {}),
         },
       })
       .catch((err) => {
         this.logger.error(
-          `${this.logPrefix}ClickhouseWriter.writeToClickhouse ${err}`,
+          `${this.logPrefix}ClickhouseWriter.writeToClickhouse`,
+          {
+            format: this.strategyFactory.format,
+            table: params.logicalTable,
+            destination: params.destinationTable,
+            ...errorContext(err),
+          },
         );
         throw err;
       });

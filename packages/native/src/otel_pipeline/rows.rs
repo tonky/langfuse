@@ -12,6 +12,7 @@ use base64::Engine;
 use sha2::{Digest, Sha256};
 
 use crate::native_memory::retained_size;
+use crate::native_schema::PreparedEventRow;
 use crate::native_task::NativeResult;
 use crate::otel::types::{SkillAvailableInput, SkillResourceInput};
 use crate::otel::{value::Value, OwnedEvent};
@@ -272,9 +273,17 @@ pub(super) fn finalize_inner(
                 .then(|| row.row.estimated_dispatch_bytes() as f64);
             let environment = row.row.environment.clone();
             let trace_id = row.row.trace_id.clone();
-            let span_id = row.row.span_id.clone();
             let prepared = row.row.into_prepared().map_err(|error| {
-                failure(format!("cannot finalize OTEL event {span_id}: {error}"))
+                let safe_field = error
+                    .split_once(':')
+                    .map(|(field, _)| field)
+                    .filter(|field| {
+                        PreparedEventRow::columns()
+                            .iter()
+                            .any(|(name, _, _)| name == *field)
+                    })
+                    .unwrap_or("unknown");
+                failure(format!("cannot finalize OTEL event: {safe_field}"))
             })?;
             Ok(FinalizedOtelEvent {
                 event: PreparedEvent {

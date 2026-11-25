@@ -79,8 +79,6 @@ export async function uploadOtelMedia(
   try {
     if (target !== "primary")
       return await target.media.upload(request, uploadMedia);
-    if (hooks?.media?.upload)
-      return await hooks.media.upload(request, uploadMedia);
     return await uploadMedia(request);
   } catch (error) {
     hooks?.onFailure?.("media_upload");
@@ -100,8 +98,6 @@ export async function associateOtelMedia(
   try {
     if (target !== "primary")
       return await target.media.associate(request, primary);
-    if (hooks?.media?.associate)
-      return await hooks.media.associate(request, primary);
     return await primary();
   } catch (error) {
     hooks?.onFailure?.("media_association");

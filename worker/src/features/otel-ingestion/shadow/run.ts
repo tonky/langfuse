@@ -1,20 +1,25 @@
+import { context, propagation, ROOT_CONTEXT } from "@opentelemetry/api";
 import { prepareOtelJson, type OtelProcessingContext } from "@langfuse/native";
 import {
   logger,
   recordDistribution,
   recordIncrement,
-  withCustomerDataLoggingSuppressed,
 } from "@langfuse/shared/src/server";
 import { getDeterministicSamplingValue } from "../../evaluation/deterministicSampling";
 import { ClickhouseWriter } from "../../../services/ClickhouseWriter";
 import { classifyJobFailure } from "../../../queues/jobFailureReason";
 import { processRustOtelEvents } from "../processRustOtelEvents";
 import { effectDifferences, ShadowScope } from "./context";
-import { otelProcessingHooks } from "../processingHooks";
 import { shadowJobId, shadowRowKey, shadowSourceFile } from "./rowKey";
 import { enqueueShadowRows, flushShadowRows } from "./verifyRows";
 import { closeShadowWriter, getShadowWriter } from "./writer";
 
+// The shared logger includes OTEL baggage. Background replay has its own trace
+// context so a replay error cannot mark the accepted ingestion job as failed.
+const shadowContext = propagation.setBaggage(
+  ROOT_CONTEXT,
+  propagation.createBaggage({ otel_ingestion_mode: { value: "shadow" } }),
+);
 const prefix = "langfuse.ingestion.otel.shadow.";
 const pending = new Set<Promise<void>>();
 const reservations = new Map<ShadowScope, number>();
@@ -83,8 +88,8 @@ export type PrimaryStage =
   | "primary_dispose";
 
 export function submitSample(sample: Sample, failure?: PrimaryStage) {
-  const task = otelProcessingHooks
-    .exit(() => compare(sample, failure))
+  const task = context
+    .with(shadowContext, () => compare(sample, failure))
     .catch((error: unknown) => {
       logger.warn("OTEL shadow comparison failed", {
         projectId: sample.context.projectId,
@@ -159,7 +164,7 @@ function shadowFailureReason(error: unknown) {
     ) {
       if (
         error.code === "ERR_OTEL_PROCESSING" &&
-        error.message.startsWith("cannot finalize OTEL event ")
+        error.message.startsWith("cannot finalize OTEL event")
       )
         return "row_finalization";
       return error.code;
@@ -173,32 +178,30 @@ async function runNative(sample: Sample) {
   const started = performance.now();
   let stage: string | undefined = "shadow_prepare";
   let reason: string | undefined;
-  await withCustomerDataLoggingSuppressed(async () => {
-    let batch: Awaited<ReturnType<typeof prepareOtelJson>> | undefined;
+  let batch: Awaited<ReturnType<typeof prepareOtelJson>> | undefined;
+  try {
+    batch = await prepareOtelJson(sample.bytes, sample.extractMedia);
+    stage = "shadow_process";
+    await processRustOtelEvents({
+      batch,
+      context: sample.context,
+      getWriter: getShadowWriter,
+      writes: scope,
+    });
+    stage = undefined;
+  } catch (error) {
+    reason = shadowFailureReason(error);
+  } finally {
     try {
-      batch = await prepareOtelJson(sample.bytes, sample.extractMedia);
-      stage = "shadow_process";
-      await processRustOtelEvents({
-        batch,
-        context: { ...sample.context, suppressLogging: true },
-        getWriter: getShadowWriter,
-        writes: scope,
-      });
-      stage = undefined;
+      await batch?.dispose();
     } catch (error) {
-      reason = shadowFailureReason(error);
-    } finally {
-      try {
-        await batch?.dispose();
-      } catch (error) {
-        if (stage) scope.fail("shadow_dispose");
-        else {
-          stage = "shadow_dispose";
-          reason = shadowFailureReason(error);
-        }
+      if (stage) scope.fail("shadow_dispose");
+      else {
+        stage = "shadow_dispose";
+        reason = shadowFailureReason(error);
       }
     }
-  });
+  }
   return finish(scope, started, stage, reason);
 }
 
@@ -213,6 +216,8 @@ function classification(
     return native.stage !== "none" ? "both_failed" : "primary_only_failure";
   if (native.stage !== "none") return "shadow_only_failure";
   if (primary.outcome !== native.outcome) return "different_outcome";
+  if (primary.scope.rows.length !== native.scope.rows.length)
+    return "different_enqueues";
   if (!differentEnqueues) return "enqueues_unchecked";
   return differentEnqueues.length ? "different_enqueues" : "match";
 }
@@ -256,7 +261,11 @@ function report(
     native.stage !== "none" ||
     Object.keys(primaryFailures).length > 0 ||
     Object.keys(nativeFailures).length > 0;
-  if (differences.length === 0 && !hasFailures && comparison === "match")
+  if (
+    differences.length === 0 &&
+    !hasFailures &&
+    (comparison === "match" || comparison === "enqueues_unchecked")
+  )
     return;
 
   const rows =
@@ -285,6 +294,6 @@ function report(
 export async function shutdownOtelWriters() {
   await ClickhouseWriter.shutdownAll();
   await Promise.all(pending);
-  await closeShadowWriter();
-  await flushShadowRows();
+  await context.with(shadowContext, closeShadowWriter);
+  await context.with(shadowContext, flushShadowRows);
 }

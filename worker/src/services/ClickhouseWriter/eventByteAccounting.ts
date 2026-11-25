@@ -21,9 +21,16 @@ export async function initializeEventByteAccounting(): Promise<void> {
       column?.default_type === "DEFAULT" &&
       column.default_expression.startsWith("byteSize(");
   } catch (error) {
+    const errorCode =
+      error &&
+      typeof error === "object" &&
+      typeof (error as { code?: unknown }).code === "number" &&
+      Number.isSafeInteger((error as { code: number }).code)
+        ? (error as { code: number }).code
+        : undefined;
     logger.warn(
       "Failed to detect ClickHouse event-size DEFAULT; using legacy estimates for TypeScript writers",
-      { error: error instanceof Error ? error.message : String(error) },
+      errorCode === undefined ? {} : { errorCode },
     );
   }
 }

@@ -1,9 +1,10 @@
+import { createHash } from "node:crypto";
+import { xxh32 } from "@node-rs/xxhash";
 import {
   logger,
   queryClickhouse,
   recordIncrement,
   TupleParam,
-  withCustomerDataLoggingSuppressed,
 } from "@langfuse/shared/src/server";
 import { shadowJobId, shadowRowKey, shadowStoredTime } from "./rowKey";
 import type { OtelShadowRowLocator } from "./rowKey";
@@ -67,7 +68,7 @@ const maps = [
   "tool_definitions",
 ];
 const identity =
-  "(e.project_id, e.trace_id, e.span_id, e.start_time, e.blob_storage_file_path)";
+  "(e.project_id, xxHash32(e.trace_id), hex(SHA256(e.trace_id)), hex(SHA256(e.span_id)), toTimeZone(e.start_time, 'UTC'), hex(SHA256(e.blob_storage_file_path)))";
 const columns = "e.* EXCEPT (created_at, updated_at, event_ts)";
 
 function sideQuery(table: string, side: Side): string {
@@ -77,53 +78,70 @@ function sideQuery(table: string, side: Side): string {
     count() AS copies, ${fields}, ${sorted}
 FROM ${table} AS e
 WHERE (e.project_id, toStartOfMinute(e.start_time), xxHash32(e.trace_id)) IN
-  (SELECT k.1, toStartOfMinute(k.4), xxHash32(k.2)
+  (SELECT k.1, toStartOfMinute(k.5), k.2
    FROM (SELECT arrayJoin(keys) AS k))
   AND ${identity} IN keys
 GROUP BY position`;
 }
 
+// A ClickHouse parameter error can quote the offending value. Send only digests
+// of the exporter IDs and file path, keeping the indexed trace hash for pruning.
+function digest(value: string) {
+  return createHash("sha256").update(value).digest("hex").toUpperCase();
+}
+
 async function readHashes(keys: Key[]): Promise<Map<number, Stored[]>> {
-  const rows = await withCustomerDataLoggingSuppressed(() =>
-    queryClickhouse<Stored>({
-      query: `WITH {locators:Array(Tuple(String,String,String,DateTime64(6,'UTC'),String))} AS keys
+  const rows = await queryClickhouse<Stored>({
+    query: `WITH {locators:Array(Tuple(String,UInt32,String,String,DateTime64(6,'UTC'),String))} AS keys
 ${sideQuery("events_full", "primary")}
 UNION ALL
 ${sideQuery("events_native_test", "shadow")}`,
-      params: { locators: keys.map((key) => new TupleParam(key)) },
-      useMultipartParamsAuto: true,
-      preferredClickhouseService: "ReadWrite",
-      tags: { surface: "worker", route: "otel-shadow-verify-rows" },
-      clickhouseSettings: {
-        max_threads: 2,
-        max_execution_time: 8,
-        max_bytes_to_read: "536870912",
-        max_result_rows: String(keys.length * 2),
-        result_overflow_mode: "throw",
-        asterisk_include_materialized_columns: 1,
-        asterisk_include_alias_columns: 1,
-        enable_named_columns_in_function_tuple: 1,
-        log_queries: 0,
-      },
-    }),
-  );
+    params: {
+      locators: keys.map(
+        ([projectId, traceId, spanId, startTime, file]) =>
+          new TupleParam([
+            projectId,
+            xxh32(traceId),
+            digest(traceId),
+            digest(spanId),
+            startTime,
+            digest(file),
+          ]),
+      ),
+    },
+    useMultipartParamsAuto: true,
+    preferredClickhouseService: "ReadWrite",
+    tags: { surface: "worker", route: "otel-shadow-verify-rows" },
+    clickhouseSettings: {
+      max_threads: 2,
+      max_execution_time: 8,
+      max_bytes_to_read: "536870912",
+      max_result_rows: String(keys.length * 2),
+      result_overflow_mode: "throw",
+      asterisk_include_materialized_columns: 1,
+      asterisk_include_alias_columns: 1,
+      enable_named_columns_in_function_tuple: 1,
+      log_queries: 0,
+    },
+  });
   return Map.groupBy(rows, (row) => Number(row.position) - 1);
 }
 
-function collect(sample: EnqueuedRows): Locator[] | undefined {
+function collect(sample: EnqueuedRows) {
+  let validTimes = true;
   const locators = new Map<string, Locator>();
   for (const side of sides) {
     for (const row of sample[side]) {
       const startTime = shadowStoredTime(row.startTime);
-      if (startTime === undefined) return undefined;
+      if (startTime === undefined) validTimes = false;
       const key: Key = [
         sample.projectId,
         row.traceId,
         row.spanId,
-        startTime,
+        startTime ?? row.startTime,
         sample.fileKey,
       ];
-      const id = JSON.stringify([row.traceId, row.spanId, startTime]);
+      const id = JSON.stringify([row.traceId, row.spanId, key[3]]);
       const item = locators.get(id) ?? {
         key,
         jobId: sample.jobId && shadowJobId(sample.jobId),
@@ -136,7 +154,7 @@ function collect(sample: EnqueuedRows): Locator[] | undefined {
       locators.set(id, item);
     }
   }
-  return [...locators.values()];
+  return { locators: [...locators.values()], validTimes };
 }
 
 function enqueueCounts(item: Locator) {
@@ -323,15 +341,15 @@ function flush(force: boolean): void {
   }
   pending = pending.filter((item) => !group.has(item));
   const items = [...group];
-  const heldBytes = items.reduce((total, item) => total + item.bytes, 0);
-  const heldRows = items.reduce((total, item) => total + item.rows, 0);
+  let bytesToRelease = items.reduce((total, item) => total + item.bytes, 0);
+  let rowsToRelease = items.reduce((total, item) => total + item.rows, 0);
   active = verify(combine(items), force)
     .then(({ counts, examples, readErrors, retry }) => {
       if (retry.length) {
         // A retry retains only row keys. Shared project and file names were
         // already charged once per sample in the original reservation.
         const retryBytes = Math.min(
-          heldBytes,
+          bytesToRelease,
           retry.reduce(
             (sum, { key }) =>
               sum +
@@ -349,8 +367,8 @@ function flush(force: boolean): void {
           rows: retry.length,
           bytes: retryBytes,
         });
-        retainedBytes += retryBytes;
-        retainedRows += retry.length;
+        bytesToRelease -= retryBytes;
+        rowsToRelease -= retry.length;
       }
       for (const [outcome, rows] of Object.entries(counts))
         recordIncrement(METRIC, rows, { outcome });
@@ -373,8 +391,8 @@ function flush(force: boolean): void {
       });
     })
     .finally(() => {
-      retainedRows -= heldRows;
-      retainedBytes -= heldBytes;
+      retainedRows -= rowsToRelease;
+      retainedBytes -= bytesToRelease;
       active = undefined;
       arm();
     });
@@ -384,14 +402,25 @@ export function enqueueShadowRows(sample: EnqueuedRows) {
   const rows = sample.primary.length + sample.shadow.length;
   if (rows === 0) return [];
   const bytes = sizeOf(sample);
-  if (retainedRows + rows > MAX_ROWS || retainedBytes + bytes > MAX_BYTES) {
+  // Bound transient work for a single oversized sample as well as queued reads.
+  if (rows > MAX_ROWS || bytes > MAX_BYTES) {
     recordIncrement(METRIC, rows, { outcome: "capacity" });
     return;
   }
-  const locators = collect(sample);
-  if (!locators) {
+  const { locators, validTimes } = collect(sample);
+  const differences = [];
+  for (const item of locators) {
+    if (item.primaryEnqueued !== item.shadowEnqueued)
+      differences.push(enqueueCounts(item));
+    if (differences.length === 3) break;
+  }
+  if (retainedRows + rows > MAX_ROWS || retainedBytes + bytes > MAX_BYTES) {
+    recordIncrement(METRIC, rows, { outcome: "capacity" });
+    return differences;
+  }
+  if (!validTimes) {
     recordIncrement(READ_ERROR, rows);
-    return;
+    return differences;
   }
   const now = Date.now();
   pending.push({
@@ -406,12 +435,6 @@ export function enqueueShadowRows(sample: EnqueuedRows) {
   retainedBytes += bytes;
   arm();
 
-  const differences = [];
-  for (const item of locators) {
-    if (item.primaryEnqueued !== item.shadowEnqueued)
-      differences.push(enqueueCounts(item));
-    if (differences.length === 3) break;
-  }
   return differences;
 }
 

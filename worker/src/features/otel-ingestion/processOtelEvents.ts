@@ -1,12 +1,7 @@
-import { otelProcessingHooks } from "./processingHooks";
 import { restoreInlineMedia } from "../otel-media/resolveExtractedMedia";
 import type { EarlyOtelBatch } from "@langfuse/native";
 import { convertEventRecordToObservationForEval } from "@langfuse/shared";
-import {
-  logger,
-  OtelIngestionProcessor,
-  traceException,
-} from "@langfuse/shared/src/server";
+import { logger, OtelIngestionProcessor } from "@langfuse/shared/src/server";
 import { env } from "../../env";
 import { fetchEvalRules } from "../evaluation/fetchEvalRules";
 import {
@@ -24,8 +19,10 @@ import {
 } from "../otel-media/processOtelMedia";
 import type { IngestionService } from "../../services/IngestionService";
 import { isEventsDispatchEnabled } from "../eventsDispatch/config";
+import { processingHooksFor, type OtelWriteTarget } from "./processingHooks";
+import { classifyJobFailure } from "../../queues/jobFailureReason";
 
-type ProcessOtelEventsParams = {
+export type ProcessOtelEventsParams = {
   processor: OtelIngestionProcessor;
   resourceSpans: Parameters<OtelIngestionProcessor["processToEvent"]>[0];
   ingestionService: IngestionService;
@@ -35,6 +32,7 @@ type ProcessOtelEventsParams = {
   earlyBatch?: EarlyOtelBatch;
   mediaPath?: "early" | "reference";
   inputByteLength?: number;
+  otelShadowScope?: OtelWriteTarget;
 };
 
 /**
@@ -56,7 +54,10 @@ export async function processOtelEvents({
   earlyBatch,
   mediaPath,
   inputByteLength,
+  otelShadowScope = "primary",
 }: ProcessOtelEventsParams): Promise<OtelMediaPresence | undefined> {
+  const writes = otelShadowScope;
+  const hooks = processingHooksFor(writes);
   // Evals and direct event writes share the enriched trace attributes.
   const eventInputs = processor.processToEvent(resourceSpans);
   if (eventInputs.length === 0) {
@@ -74,8 +75,12 @@ export async function processOtelEvents({
   const rules = await fetchEvalRules(projectId, {
     includeTraceTranscriptRules,
   }).catch((error) => {
-    traceException(error);
-    logger.warn(`Failed to fetch eval rules for project ${projectId}`, error);
+    hooks?.onFailure?.("eval_rules");
+    logger.warn("Failed to fetch OTEL eval rules", {
+      stage: "eval_rules",
+      projectId,
+      failureReason: classifyJobFailure(error),
+    });
     return { observationRules: [], traceTranscriptRules: [] };
   });
   const needsScheduler =
@@ -109,14 +114,14 @@ export async function processOtelEvents({
       fileKey,
       mediaBucket: env.LANGFUSE_S3_MEDIA_UPLOAD_BUCKET,
       mediaPrefix: env.LANGFUSE_S3_MEDIA_UPLOAD_PREFIX,
+      writeTarget: writes,
     });
   }
 
   const schedulerDeps = needsScheduler
-    ? createEvalSchedulerDeps("primary", projectId, rules)
+    ? createEvalSchedulerDeps(projectId, rules, writes)
     : null;
 
-  const hooks = otelProcessingHooks.getStore();
   await Promise.all(
     // Process each event independently
     eventInputs.map(async (eventInput) => {
@@ -129,11 +134,11 @@ export async function processOtelEvents({
         );
       } catch (error) {
         hooks?.onFailure?.("lookup");
-        traceException(error);
-        logger.error(
-          `Failed to create event record for project ${eventInput.projectId} and observation ${eventInput.spanId}`,
-          { error, fileKey },
-        );
+        logger.error("Failed to create OTEL event record", {
+          stage: "lookup",
+          projectId: eventInput.projectId,
+          failureReason: classifyJobFailure(error),
+        });
 
         return;
       }
@@ -170,8 +175,10 @@ export async function processOtelEvents({
       // Step 3: Write to events table (independent of eval scheduling)
       if (shouldWriteToEventsTable) {
         try {
-          const persistedRecord =
-            await ingestionService.writeEventRecord(eventRecord);
+          const persistedRecord = await ingestionService.writeEventRecord(
+            eventRecord,
+            writes,
+          );
           hooks?.onRowEnqueued?.({
             traceId: persistedRecord.trace_id,
             spanId: persistedRecord.span_id,
@@ -189,11 +196,11 @@ export async function processOtelEvents({
           }
         } catch (error) {
           hooks?.onFailure?.("row_write");
-          traceException(error);
-          logger.error(
-            `Failed to write event record for ${eventInput.spanId}`,
-            { error, fileKey },
-          );
+          logger.error("Failed to write OTEL event record", {
+            stage: "row_write",
+            projectId: eventInput.projectId,
+            failureReason: classifyJobFailure(error),
+          });
         }
       }
     }),

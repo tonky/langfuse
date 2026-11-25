@@ -79,6 +79,7 @@ async function makeCallbackRequest<T>(params: {
     transport,
   } = params;
   const startTime = Date.now();
+  let failure = "Callback request failed";
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), config.timeoutMs);
@@ -109,14 +110,16 @@ async function makeCallbackRequest<T>(params: {
     );
 
     if (!response.ok) {
-      const errorText = await response.text().catch(() => "Unknown error");
+      // The callback can echo the original request in its error body.
+      response.body?.cancel().catch(() => undefined);
       return {
         success: false,
         data,
-        error: `HTTP ${response.status}: ${errorText}`,
+        error: `HTTP ${response.status}`,
       };
     }
 
+    failure = "Invalid masking response";
     const maskedData = await transport.read(response);
     return { success: true, data: maskedData };
   } catch (error) {
@@ -137,7 +140,7 @@ async function makeCallbackRequest<T>(params: {
     return {
       success: false,
       data,
-      error: error instanceof Error ? error.message : "Unknown error",
+      error: failure,
     };
   } finally {
     clearTimeout(timeoutId);

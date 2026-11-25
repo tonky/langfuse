@@ -52,7 +52,6 @@ import {
   parsePreparedOtelBatch,
   prepareOtelBatch,
 } from "../features/otel-ingestion/prepareOtelBatch";
-import { otelProcessingHooks } from "../features/otel-ingestion/processingHooks";
 import {
   reserveSample,
   sampleFile,
@@ -701,7 +700,7 @@ export const otelIngestionQueueProcessorBuilder = (
           propagatedHeaders: job.data.payload.propagatedHeaders,
           retainNativeBatch,
           extractMedia,
-          onAcceptedInput: accept,
+          onShadowReplayInput: accept,
         });
         if ("error" in prepared) {
           logger.warn("Dropping OTEL event due to masking failure", {
@@ -709,7 +708,6 @@ export const otelIngestionQueueProcessorBuilder = (
             orgId: job.data.payload.authCheck.scope.orgId,
             fileKey,
             error: prepared.error,
-            propagatedHeaders: job.data.payload.propagatedHeaders,
           });
           return;
         }
@@ -771,7 +769,6 @@ export const otelIngestionQueueProcessorBuilder = (
               orgId: job.data.payload.authCheck.scope.orgId,
               fileKey,
               error: maskingResult.error,
-              propagatedHeaders: job.data.payload.propagatedHeaders,
             });
             return;
           }
@@ -995,8 +992,7 @@ export const otelIngestionQueueProcessorBuilder = (
             "OTEL resource spans missing for TypeScript processing",
           );
         }
-        // The JSON writer owns a process-wide flush timer. Initialize it outside the sampled batch.
-        const params = {
+        return processOtelEvents({
           processor,
           resourceSpans: parsedSpans,
           ingestionService: getIngestionService(),
@@ -1006,10 +1002,10 @@ export const otelIngestionQueueProcessorBuilder = (
           earlyBatch,
           mediaPath,
           inputByteLength,
-        };
-        return sample && shouldWriteToEventsTable
-          ? otelProcessingHooks.run(sample.primary, processOtelEvents, params)
-          : processOtelEvents(params);
+          otelShadowScope: shouldWriteToEventsTable
+            ? sample?.primary
+            : undefined,
+        });
       };
       const directMediaPresence = await processDirectOtelBatch();
       if (directMediaPresence) {

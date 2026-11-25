@@ -70,8 +70,11 @@ export class PromptService {
         // Capture the namespace before reading the DB so invalidation cannot
         // move an in-flight result into the new epoch.
         cacheKey = await this.getCacheKey(params);
-      } catch (e) {
-        this.logError("Error getting cached prompt", e);
+      } catch {
+        this.logError(
+          "Error getting cached prompt",
+          promptLookupContext(params),
+        );
       }
 
       const cachedPrompt = cacheKey
@@ -86,7 +89,7 @@ export class PromptService {
       tagPromptCacheOutcome(cachedPrompt ? "hit" : "miss");
 
       if (cachedPrompt) {
-        this.logDebug("Returning cached prompt for params", params);
+        this.logDebug("Returning cached prompt", promptLookupContext(params));
 
         return cachedPrompt;
       }
@@ -97,10 +100,10 @@ export class PromptService {
     if (cacheKey && dbPrompt) {
       await this.cachePrompt(cacheKey, dbPrompt);
 
-      this.logDebug("Successfully cached prompt for params", params);
+      this.logDebug("Successfully cached prompt", promptLookupContext(params));
     }
 
-    this.logDebug("Returning DB prompt for params", params);
+    this.logDebug("Returning DB prompt", promptLookupContext(params));
 
     return dbPrompt;
   }
@@ -149,7 +152,7 @@ export class PromptService {
       });
     }
 
-    this.logError("Invalid prompt params", params);
+    this.logError("Invalid prompt params", promptLookupContext(params));
 
     return null;
   }
@@ -176,8 +179,8 @@ export class PromptService {
       const value = await this.redis?.get(key);
 
       if (value) return JSON.parse(value) as PromptResult;
-    } catch (e) {
-      this.logError("Error getting cached prompt", e);
+    } catch {
+      this.logError("Error getting cached prompt");
     }
 
     return null;
@@ -188,8 +191,8 @@ export class PromptService {
       const value = JSON.stringify(prompt);
 
       await this.redis?.set(key, value, "EX", this.ttlSeconds);
-    } catch (e) {
-      this.logError("Error caching prompt", e);
+    } catch {
+      this.logError("Error caching prompt");
     }
   }
 
@@ -435,7 +438,10 @@ export class PromptService {
         resolvedPrompt,
       };
     } catch (err) {
-      console.error(err);
+      this.logError("Failed to resolve prompt graph", {
+        projectId: params.projectId,
+        rootPromptId: params.parentPrompt.id,
+      });
 
       throw err;
     }
@@ -607,6 +613,15 @@ function tagPromptCacheOutcome(
   outcome: "hit" | "miss" | "bypass" | "disabled",
 ) {
   addTagsToCurrentSpan({ "langfuse.prompt.cache": outcome });
+}
+
+function promptLookupContext(params: PromptParams): Record<string, unknown> {
+  return {
+    projectId: params.projectId,
+    selector: typeof params.version === "number" ? "version" : "label",
+    ...(typeof params.version === "number" ? { version: params.version } : {}),
+    resolve: params.resolve !== false,
+  };
 }
 
 function getDependencyFetchKey(dep: ParsedPromptDependencyTag) {

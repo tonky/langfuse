@@ -51,12 +51,10 @@ export function truncateOversizedRecord<
   // Truncate input field if present
   if ("input" in record && record.input && record.input.length > maxFieldSize) {
     record.input = truncateField(record.input);
-    logger.info(
-      `Truncated oversized input field for record ${record.id} of type ${tableName}`,
-      {
-        projectId: record.project_id,
-      },
-    );
+    logger.info(`Truncated oversized input field of type ${tableName}`, {
+      projectId: record.project_id,
+      field: "input",
+    });
   }
 
   // Truncate output field if present
@@ -66,12 +64,10 @@ export function truncateOversizedRecord<
     record.output.length > maxFieldSize
   ) {
     record.output = truncateField(record.output);
-    logger.info(
-      `Truncated oversized output field for record ${record.id} of type ${tableName}`,
-      {
-        projectId: record.project_id,
-      },
-    );
+    logger.info(`Truncated oversized output field of type ${tableName}`, {
+      projectId: record.project_id,
+      field: "output",
+    });
   }
 
   // Truncate map metadata; JSON-string metadata (Topics) can't be cut without breaking it
@@ -85,12 +81,10 @@ export function truncateOversizedRecord<
     for (const [key, value] of Object.entries(metadata)) {
       if (value && value.length > maxFieldSize) {
         truncatedMetadata[key] = truncateField(value) || "";
-        logger.info(
-          `Truncated oversized metadata for record ${recordIdentity(record).id} of type ${tableName} and key ${key}`,
-          {
-            projectId: record.project_id,
-          },
-        );
+        logger.info(`Truncated oversized metadata of type ${tableName}`, {
+          projectId: record.project_id,
+          field: "metadata",
+        });
       } else {
         truncatedMetadata[key] = value;
       }
@@ -111,7 +105,7 @@ export function clampDecimal64Value(value: number): [number, boolean] {
 }
 
 type CostMapContext = {
-  recordId: string;
+  recordId?: string;
   projectId: string;
   fieldName: string;
 };
@@ -143,7 +137,6 @@ export function clampDecimal64Map(
 
   logger.warn("Clamped Decimal64(12) overflow in cost map", {
     projectId: context.projectId,
-    recordId: context.recordId,
     fieldName: context.fieldName,
   });
   recordIncrement("langfuse.clickhouse_writer.decimal64_clamped");
@@ -155,7 +148,6 @@ export function clampDecimal64Fields<Row extends RecordInsertType<TableName>>(
   record: Row,
 ): Row {
   const ctx = {
-    recordId: recordIdentity(record).id,
     projectId: record.project_id,
   };
 
@@ -182,7 +174,6 @@ export function clampDecimal64Fields<Row extends RecordInsertType<TableName>>(
           record.total_cost = cv;
           logger.warn("Clamped Decimal64(12) overflow in total_cost", {
             projectId: ctx.projectId,
-            recordId: ctx.recordId,
             fieldName: "total_cost",
           });
           recordIncrement("langfuse.clickhouse_writer.decimal64_clamped");

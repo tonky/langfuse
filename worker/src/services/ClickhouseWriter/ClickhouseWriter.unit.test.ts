@@ -13,10 +13,6 @@ import {
   clampDecimal64Value,
   truncateOversizedRecord,
 } from "./jsonRecords";
-import {
-  closeShadowWriter,
-  getShadowWriter,
-} from "../../features/otel-ingestion/shadow/writer";
 
 const { encodeClickhouseEventsMock } = vi.hoisted(() => ({
   encodeClickhouseEventsMock: vi.fn(),
@@ -89,7 +85,6 @@ describe("ClickhouseWriter", () => {
   });
 
   afterEach(async () => {
-    await closeShadowWriter();
     vi.useRealTimers();
 
     await ClickhouseWriter.shutdownAll();
@@ -368,7 +363,12 @@ describe("ClickhouseWriter", () => {
         ([message]) =>
           message === `[native] ClickhouseWriter.flush ${TableName.EventsFull}`,
       )?.[1];
-    expect(flushError).toBe(streamError);
+    expect(flushError).toEqual({
+      format: "native",
+      table: TableName.EventsFull,
+      destination: TableName.EventsFull,
+      reason: "other",
+    });
   });
 
   it("requeues Native rows when ClickHouse returns exception text", async () => {
@@ -404,10 +404,13 @@ describe("ClickhouseWriter", () => {
       .mock.calls.find(
         ([message]) =>
           message === `[native] ClickhouseWriter.flush ${TableName.EventsFull}`,
-      )?.[1] as Error;
-    expect(flushError.message).toContain(exceptionText);
-    expect(flushError.message.length).toBeLessThanOrEqual(4200);
-    expect(flushError.message).not.toMatch(/[\uD800-\uDBFF]$/);
+      )?.[1];
+    expect(flushError).toEqual({
+      format: "native",
+      table: TableName.EventsFull,
+      destination: TableName.EventsFull,
+      reason: "other",
+    });
   });
 
   it("batches prepared Native rows into one encoder invocation", async () => {
@@ -463,7 +466,9 @@ describe("ClickhouseWriter", () => {
     );
     expect(logger.error).toHaveBeenCalledWith(
       expect.stringContaining("Max attempts reached"),
-      expect.objectContaining({ droppedIds: [event.ids] }),
+      expect.objectContaining({
+        droppedIds: [{ project_id: "project-1" }],
+      }),
     );
     expect(nativeWriter["queue"][TableName.EventsFull]).toHaveLength(0);
   });
@@ -488,8 +493,8 @@ describe("ClickhouseWriter", () => {
       expect.stringContaining("ClickHouse rejected events_full row"),
       {
         project_id: "project-1",
-        trace_id: "trace-1",
-        id: "e-2",
+        format: "json",
+        destination: TableName.EventsFull,
         blobStorageFilePath: "project-1/observation/e-2/event.json",
       },
     );
@@ -918,40 +923,6 @@ describe("ClickhouseWriter", () => {
     );
   });
 
-  it("tags a failed shadow flush with its destination", async () => {
-    const mockExec = vi
-      .spyOn(clickhouseClientMock, "exec")
-      .mockRejectedValue(new Error("permanent insert error"));
-    const shadowWriter = getShadowWriter(clickhouseClientMock);
-    const expectedFailureTags = {
-      entity_type: "events_native_test",
-      format: "native-test",
-      reason: "other",
-    };
-    shadowWriter.maxAttempts = 1;
-
-    shadowWriter.addToQueue(TableName.EventsFull, preparedEvent("shadow-1"));
-    await shadowWriter["flushAll"](true);
-
-    expect(mockExec).toHaveBeenCalledWith(
-      expect.objectContaining({
-        query: "INSERT INTO events_native_test FORMAT Native",
-        clickhouse_settings: expect.objectContaining({ log_queries: 0 }),
-      }),
-    );
-    for (const metric of [
-      "langfuse.queue.clickhouse_writer.error",
-      "langfuse.queue.clickhouse_writer.rows_dropped",
-    ]) {
-      expect(serverExports.recordIncrement).toHaveBeenCalledWith(
-        metric,
-        1,
-        expectedFailureTags,
-      );
-    }
-    expect(shadowWriter.queue[TableName.EventsFull]).toHaveLength(0);
-  });
-
   it("should handle different types of Clickhouse client errors", async () => {
     const mockInsert = vi
       .spyOn(clickhouseClientMock, "insert")
@@ -963,12 +934,20 @@ describe("ClickhouseWriter", () => {
 
     await vi.advanceTimersByTimeAsync(writer.writeInterval);
     expect(logger.error).toHaveBeenCalledWith(
-      expect.stringContaining("Network error"),
+      "ClickhouseWriter.flush traces",
+      expect.objectContaining({
+        reason: "other",
+        destination: TableName.Traces,
+      }),
     );
 
     await vi.advanceTimersByTimeAsync(writer.writeInterval);
     expect(logger.error).toHaveBeenCalledWith(
-      expect.stringContaining("Timeout"),
+      "ClickhouseWriter.flush traces",
+      expect.objectContaining({
+        reason: "other",
+        destination: TableName.Traces,
+      }),
     );
 
     await vi.advanceTimersByTimeAsync(writer.writeInterval);
@@ -1101,7 +1080,6 @@ describe("ClickhouseWriter", () => {
           "Clamped Decimal64(12) overflow in cost map",
           expect.objectContaining({
             projectId: "p1",
-            recordId: "r1",
             fieldName: "cost_details",
           }),
         );
@@ -1252,7 +1230,8 @@ describe("ClickhouseWriter", () => {
 
       expect(mockInsert).toHaveBeenCalledTimes(1);
       expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining("size of json object is extremely large"),
+        "ClickhouseWriter.writeToClickhouse",
+        expect.objectContaining({ reason: "payload_too_large" }),
       );
 
       // Second attempt with truncated data
@@ -1263,8 +1242,7 @@ describe("ClickhouseWriter", () => {
         expect.stringContaining("Truncating oversized records"),
         expect.objectContaining({
           attemptNumber: 1,
-          error:
-            "size of json object is extremely large and expected not greater than 1MB",
+          reason: "payload_too_large",
         }),
       );
       expect(writer["queue"][TableName.Traces]).toHaveLength(0);
@@ -1299,7 +1277,7 @@ describe("ClickhouseWriter", () => {
       expect(logger.warn).toHaveBeenCalledWith(
         expect.stringContaining("Splitting batch and retrying"),
         expect.objectContaining({
-          error: "invalid string length",
+          reason: "payload_too_large",
           batchSize: 4,
         }),
       );

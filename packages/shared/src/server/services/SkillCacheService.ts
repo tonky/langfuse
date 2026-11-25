@@ -38,8 +38,11 @@ export class SkillCacheService {
           this.getCacheKey(projectId, version),
         );
         cachedIds = await this.redis.mget(...keys);
-      } catch (error) {
-        logger.error("[SkillCacheService] Error reading cache", error);
+      } catch {
+        logger.error("[SkillCacheService] Error reading cache", {
+          projectId,
+          requestedCount: versions.length,
+        });
       }
     }
 
@@ -65,8 +68,11 @@ export class SkillCacheService {
         const results = await pipeline.exec();
         const error = results?.find(([error]) => error)?.[0];
         if (error) throw error;
-      } catch (error) {
-        logger.error("[SkillCacheService] Error writing cache", error);
+      } catch {
+        logger.error("[SkillCacheService] Error writing cache", {
+          projectId,
+          fetchedCount: fetched.length,
+        });
       }
     }
 

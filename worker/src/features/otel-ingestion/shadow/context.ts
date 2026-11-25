@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { stableJsonStringify } from "@langfuse/shared";
-import type { OtelProcessingHooks } from "../processingHooks";
 import { mediaHooks } from "./media";
 import { schedulingHooks } from "./eval";
 import type { OtelShadowRowLocator } from "./rowKey";
@@ -11,7 +10,7 @@ type Effect = {
   results: { value: unknown }[];
 };
 
-export class ShadowScope implements OtelProcessingHooks {
+export class ShadowScope {
   readonly media;
   readonly scheduling;
   readonly recordIngestionMetrics;

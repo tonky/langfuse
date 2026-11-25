@@ -37,7 +37,7 @@ export type ClickhouseWriteStrategy<Row> = {
 
 export type ClickhouseWriteStrategyFactory<Row> = {
   readonly format: string;
-  readonly metricEntityType?: string;
+  readonly destinationTable?: string;
   create(): ClickhouseWriteStrategy<Row>;
 };
 

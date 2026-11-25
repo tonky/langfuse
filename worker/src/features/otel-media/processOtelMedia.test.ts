@@ -16,9 +16,9 @@ const mocks = vi.hoisted(() => {
         callback: (activeSpan: typeof span) => Promise<unknown>,
       ) => callback(span),
     ),
+    isS3SlowDownError: vi.fn(() => false),
     logger: { warn: vi.fn() },
     recordDistribution: vi.fn(),
-    recordIncrement: vi.fn(),
     span,
     linkMediaToTraceOrObservation: vi.fn(),
     uploadMediaForTrace: vi.fn(),
@@ -30,17 +30,17 @@ vi.mock("@langfuse/shared/src/server", () => ({
   getClickhouseEntityType: (eventType: string) =>
     eventType === "trace-create" ? "trace" : "observation",
   instrumentAsync: mocks.instrumentAsync,
+  isS3SlowDownError: mocks.isS3SlowDownError,
   logger: mocks.logger,
   processOtelMedia: vi.fn(),
   recordDistribution: mocks.recordDistribution,
-  recordIncrement: mocks.recordIncrement,
+  recordIncrement: vi.fn(),
   linkMediaToTraceOrObservation: mocks.linkMediaToTraceOrObservation,
   uploadMediaForTrace: mocks.uploadMediaForTrace,
 }));
 
 import { MediaAssociationOrigin } from "@langfuse/shared";
 import type { IngestionEventType } from "@langfuse/shared/src/server";
-import { otelProcessingHooks } from "../otel-ingestion/processingHooks";
 import {
   createDirectOtelMediaTargets,
   createLegacyOtelMediaTargets,
@@ -218,43 +218,20 @@ describe("processOtelEventMedia", () => {
       input: { role: "user" },
       name: "observation-name",
     };
-    const uploadRequest = {
-      projectId: "project-id",
-      traceId: "trace-id",
-      observationId: "observation-id",
-      field: "input" as const,
-      contentType: "image/png" as const,
-      contentBytes: Buffer.from("media"),
-      mediaBucket: "media-bucket",
-      mediaPrefix: "media/",
-    };
-    const hookedResult = {
-      mediaId: "hooked-media",
-      outcome: "reused" as const,
-      byteLength: uploadRequest.contentBytes.length,
-    };
-    const uploadHook = vi.fn().mockResolvedValue(hookedResult);
-    const processMedia = vi.fn(async ({ uploadMedia }) => {
-      expect(await uploadMedia(uploadRequest)).toEqual(hookedResult);
-      return processResult;
-    });
+    const processMedia = vi.fn().mockResolvedValue(processResult);
 
-    const mediaPresence = await otelProcessingHooks.run(
-      { media: { upload: uploadHook } },
-      () =>
-        processOtelEventMedia({
-          targets: createDirectOtelMediaTargets([
-            eventInput,
-            { traceId: "trace-id", spanId: "without-media-fields" },
-            { traceId: "trace-id", input: "missing-span-id" },
-            null,
-          ]),
-          writePath: "direct",
-          ...MEDIA_DESTINATION,
-          fileKey: "file-key",
-          processMedia,
-        }),
-    );
+    const mediaPresence = await processOtelEventMedia({
+      targets: createDirectOtelMediaTargets([
+        eventInput,
+        { traceId: "trace-id", spanId: "without-media-fields" },
+        { traceId: "trace-id", input: "missing-span-id" },
+        null,
+      ]),
+      writePath: "direct",
+      ...MEDIA_DESTINATION,
+      fileKey: "file-key",
+      processMedia,
+    });
 
     expect(mediaPresence).toBe("present");
     expect(processMedia).toHaveBeenCalledWith(
@@ -270,10 +247,17 @@ describe("processOtelEventMedia", () => {
         mediaPath: "reference",
       }),
     );
-    expect(uploadHook).toHaveBeenCalledOnce();
-    expect(mocks.uploadMediaForTrace).not.toHaveBeenCalled();
     const uploadMedia = processMedia.mock.calls[0]?.[0].uploadMedia;
-    await uploadMedia(uploadRequest);
+    await uploadMedia({
+      projectId: "project-id",
+      traceId: "trace-id",
+      observationId: "observation-id",
+      field: "input",
+      contentType: "image/png",
+      contentBytes: Buffer.from("media"),
+      mediaBucket: "media-bucket",
+      mediaPrefix: "media/",
+    });
     expect(mocks.uploadMediaForTrace).toHaveBeenCalledWith(
       expect.objectContaining({
         origin: MediaAssociationOrigin.INGESTION_MEDIA_EXTRACTION,
@@ -312,35 +296,6 @@ describe("processOtelEventMedia", () => {
         media_presence: "present",
       },
     );
-  });
-
-  it("skips media metrics when ingestion metrics are disabled", async () => {
-    const processMedia = vi
-      .fn()
-      .mockResolvedValueOnce(processResult)
-      .mockRejectedValueOnce(new Error("unexpected"));
-    const run = () =>
-      otelProcessingHooks.run({ recordIngestionMetrics: false }, () =>
-        processOtelEventMedia({
-          targets: createDirectOtelMediaTargets([
-            { traceId: "trace-id", spanId: "observation-id", input: "input" },
-          ]),
-          writePath: "direct",
-          ...MEDIA_DESTINATION,
-          fileKey: "file-key",
-          inputByteLength: 12,
-          processMedia,
-        }),
-      );
-
-    await expect(run()).resolves.toBe("present");
-    expect(processMedia).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ recordIngestionMetrics: false }),
-    );
-    await expect(run()).resolves.toBe("unknown");
-    expect(mocks.recordDistribution).not.toHaveBeenCalled();
-    expect(mocks.recordIncrement).not.toHaveBeenCalled();
   });
 
   it("does not create a processing span when there are no media fields", async () => {
@@ -398,7 +353,11 @@ describe("processOtelEventMedia", () => {
     });
     expect(mocks.logger.warn).toHaveBeenCalledWith(
       "OTEL media processing failed; continuing ingestion with original span values",
-      expect.objectContaining({ projectId: "project-id", fileKey: "file-key" }),
+      {
+        stage: "media_processing",
+        projectId: "project-id",
+        failureReason: "other",
+      },
     );
   });
 
@@ -780,17 +739,12 @@ describe("processOtelEventMedia", () => {
     mocks.linkMediaToTraceOrObservation.mockRejectedValueOnce(
       new Error("link failed"),
     );
-    const onFailure = vi.fn();
-    const failed = await otelProcessingHooks.run(
-      { media: { associate: (_request, associate) => associate() }, onFailure },
-      () => resolveTarget(batch, failedTarget),
-    );
+    const failed = await resolveTarget(batch, failedTarget);
     const direct = await resolveTarget(batch, directTarget);
 
     expect(first).toMatchObject({ uploaded: 1, reused: 0, bytesProcessed: 5 });
     expect(failed).toMatchObject({ failed: 1, uploaded: 0, reused: 0 });
     expect(failedTarget.input.data).toBe("original-value");
-    expect(onFailure.mock.calls).toEqual([["media_association"]]);
     expect(direct).toMatchObject({
       failed: 0,
       uploaded: 0,
@@ -823,17 +777,12 @@ describe("processOtelEventMedia", () => {
     });
     const target = () => createProviderPayload(reference);
 
-    const onFailure = vi.fn();
-    const failed = await otelProcessingHooks.run(
-      { media: { upload: (request, upload) => upload(request) }, onFailure },
-      () => resolveTarget(batch, target()),
-    );
+    const failed = await resolveTarget(batch, target());
     const retriedTarget = target();
     const retried = await resolveTarget(batch, retriedTarget);
 
     expect(failed).toMatchObject({ failed: 1, uploaded: 0 });
     expect(retried).toMatchObject({ failed: 0, uploaded: 1 });
-    expect(onFailure.mock.calls).toEqual([["media_upload"]]);
     expect(mediaBody).toHaveBeenCalledTimes(2);
     expect(mocks.uploadMediaForTrace).toHaveBeenCalledTimes(2);
     expect(retriedTarget.input).toMatchObject({

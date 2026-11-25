@@ -1,3 +1,4 @@
+import { classifyJobFailure } from "../../queues/jobFailureReason";
 import type { OtelWriteTarget } from "../otel-ingestion/processingHooks";
 import type { EarlyOtelBatch, ExtractedOtelMedia } from "@langfuse/native";
 import pLimit from "p-limit";
@@ -219,9 +220,17 @@ export async function resolveExtractedMedia(params: {
   mediaBucket: string;
   mediaPrefix: string;
   writePath: OtelMediaWritePath;
+  target?: OtelWriteTarget;
 }) {
-  const { batch, targets, projectId, mediaBucket, mediaPrefix, writePath } =
-    params;
+  const {
+    batch,
+    targets,
+    projectId,
+    mediaBucket,
+    mediaPrefix,
+    writePath,
+    target: writeTarget = "primary",
+  } = params;
   const stats = {
     uploaded: 0,
     reused: 0,
@@ -245,7 +254,7 @@ export async function resolveExtractedMedia(params: {
       const contentType = entry.contentType;
       if (!isMediaContentType(contentType))
         throw new Error("unsupported extracted media type");
-      const result = await uploadExtractedMediaOnce("primary", {
+      const result = await uploadExtractedMediaOnce(writeTarget, {
         batch,
         projectId,
         mediaBucket,
@@ -272,7 +281,7 @@ export async function resolveExtractedMedia(params: {
       );
       stats.bytesRemoved += bytesRemoved;
       recordExtractedMediaUpload(
-        "primary",
+        writeTarget,
         result.outcome,
         entry.kind,
         writePath,
@@ -282,15 +291,13 @@ export async function resolveExtractedMedia(params: {
       return replacement;
     } catch (error) {
       stats.failed++;
-      recordExtractedMediaUpload("primary", "failed", entry.kind, writePath);
+      recordExtractedMediaUpload(writeTarget, "failed", entry.kind, writePath);
       logger.warn(
         "Extracted OTEL media upload failed; keeping the original inline value",
         {
-          error,
+          stage: "media_upload",
           projectId,
-          traceId: target.traceId,
-          observationId: target.observationId,
-          field,
+          failureReason: classifyJobFailure(error),
         },
       );
       return undefined;

@@ -29,6 +29,7 @@ import {
 } from "@langfuse/shared/src/server";
 
 import { createW3CTraceId } from "../../utils/utilities";
+import { classifyJobFailure } from "../../../queues/jobFailureReason";
 import { isInternalEvalEnvironment } from "../isEvalTargetEnvironmentAllowed";
 
 interface ScheduleObservationEvalsParams extends ObservationForScheduling {
@@ -143,7 +144,6 @@ export async function scheduleObservationEvals(
     if (!isTargeted) {
       logger.debug("Observation does not match eval config filter", {
         configId: config.id,
-        observationId: observation.span_id,
       });
 
       return [];
@@ -159,7 +159,6 @@ export async function scheduleObservationEvals(
     ) {
       logger.debug("Observation sampled out for eval config", {
         configId: config.id,
-        observationId: observation.span_id,
         samplingRate,
       });
 
@@ -208,9 +207,8 @@ export async function scheduleObservationEvals(
     logger.error("Failed to process observation eval assignment", {
       configId: config.id,
       assignmentId: assignment.id,
-      observationId: observation.span_id,
       projectId: observation.project_id,
-      error: result.reason,
+      reason: classifyJobFailure(result.reason),
     });
 
     return [result.reason];
@@ -315,7 +313,6 @@ async function processMatchingConfig(
 
   logger.debug("Scheduled observation eval job", {
     configId: matchingConfig.id,
-    observationId: observation.span_id,
     jobExecutionId,
   });
 }
