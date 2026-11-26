@@ -600,7 +600,6 @@ pipeline: {
 					needs:    ["web:build", "worker:build"]
 					target_scope: {
 						tests: [
-							"web/src/__e2e__/*.servertest.ts",
 							"web/src/__tests__/server/annotation-queue-assignments-api.servertest.ts",
 							"web/src/__tests__/server/annotation-queues-api.servertest.ts",
 							"web/src/__tests__/server/blob-storage-integration-api.servertest.ts",
@@ -659,6 +658,51 @@ pipeline: {
 						env: {
 							"NODE_ENV":                                        "test"
 							"NODE_VERSION":                                    "24"
+							"LANGFUSE_S3_EVENT_UPLOAD_BUCKET":                 "langfuse"
+							"ENCRYPTION_KEY":                                  "0000000000000000000000000000000000000000000000000000000000000000"
+							"SALT":                                            "salt"
+							"NEXTAUTH_SECRET":                                 "secret"
+							"NEXTAUTH_URL":                                    "http://localhost:3000"
+							"VITEST_MAX_WORKERS":                              "2"
+							"LANGFUSE_EE_LICENSE_KEY":                         "langfuse_ee_test"
+							"LANGFUSE_CACHE_PROMPT_ENABLED":                   "false"
+							"LANGFUSE_INGESTION_QUEUE_DELAY_MS":               "1"
+							"LANGFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS": "1"
+							"LANGFUSE_TRACE_DELETE_DELAY_MS":                  "1"
+							"LANGFUSE_TRACE_DELETE_CONCURRENCY":               "100"
+							"ADMIN_API_KEY":                                   "admin-api-key"
+							"LANGFUSE_SKIP_EVALUATOR_MODEL_CALL_VALIDATION":   "true"
+							"LANGFUSE_ENABLE_SCORES_V3_API":                   "true"
+							"LANGFUSE_AUDIT_LOG_RELAY_ENABLED":                "false"
+							"LANGFUSE_AI_GATEWAY_DEPLOYED":                    "true"
+							"LANGFUSE_INIT_ORG_ID":                            "seed-org-id"
+							"LANGFUSE_INIT_ORG_NAME":                          "Seed Org"
+							"LANGFUSE_INIT_ORG_CLOUD_PLAN":                    "Team"
+							"LANGFUSE_INIT_PROJECT_ID":                        "7a88fb47-b4e2-43b8-a06c-a5ce950dc53a"
+							"LANGFUSE_INIT_PROJECT_NAME":                      "Seed Project"
+							"LANGFUSE_INIT_PROJECT_PUBLIC_KEY":                "pk-lf-1234567890"
+							"LANGFUSE_INIT_PROJECT_SECRET_KEY":                "sk-lf-1234567890"
+							"LANGFUSE_INIT_USER_EMAIL":                        "demo@langfuse.com"
+							"LANGFUSE_INIT_USER_NAME":                         "Demo User"
+							"LANGFUSE_INIT_USER_PASSWORD":                     "password"
+						}
+					}]
+				}
+				e2e_server: {
+					name:     "run web server e2e suite"
+					shards:   1
+					recorder: "own_linux"
+					needs:    ["web:build", "worker:build"]
+					target_scope: tests: ["web/src/__e2e__/*.servertest.ts"]
+					tasks: [{
+						name:      "Run web server e2e suite"
+						command:   "../.enact/scripts/run-web-api-tests.sh {relative_targets}"
+						timeout:   "20m"
+						unset_env: ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_ENDPOINT_URL"]
+						env: {
+							"NODE_ENV":                                        "test"
+							"NODE_VERSION":                                    "24"
+							"LANGFUSE_SEED_EXAMPLES":                          "1"
 							"LANGFUSE_S3_EVENT_UPLOAD_BUCKET":                 "langfuse"
 							"ENCRYPTION_KEY":                                  "0000000000000000000000000000000000000000000000000000000000000000"
 							"SALT":                                            "salt"

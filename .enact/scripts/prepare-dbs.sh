@@ -56,3 +56,7 @@ pnpm --filter @langfuse/shared run ch:dev-tables
 if [ "${LANGFUSE_SEED_DB:-0}" = "1" ]; then
   pnpm --filter @langfuse/shared run db:seed
 fi
+
+if [ "${LANGFUSE_SEED_EXAMPLES:-0}" = "1" ]; then
+  pnpm --filter @langfuse/shared run db:seed:examples
+fi

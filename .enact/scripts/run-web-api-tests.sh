@@ -12,6 +12,11 @@ fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
+# `media.servertest.ts` asserts `DATABASE_URL.includes("localhost:5432")`.
+if [ -n "${DATABASE_URL:-}" ]; then
+  export DATABASE_URL="${DATABASE_URL//127.0.0.1/localhost}"
+fi
+
 LANGFUSE_SEED_DB=1 "$ROOT/.enact/scripts/prepare-dbs.sh"
 
 WORKER_LOG="/tmp/langfuse-api-worker-$$.log"
@@ -19,31 +24,35 @@ WEB_LOG="/tmp/langfuse-api-web-$$.log"
 WORKER_PID=""
 WEB_PID=""
 
+kill_tree() {
+  local pid="$1"
+  [ -n "$pid" ] || return 0
+  kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+}
+
+kill_tree_force() {
+  local pid="$1"
+  [ -n "$pid" ] || return 0
+  kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
 cleanup() {
   local rc=$?
-  if [ -n "$WEB_PID" ]; then
-    kill "$WEB_PID" 2>/dev/null || true
-    wait "$WEB_PID" 2>/dev/null || true
-  fi
-  if [ -n "$WORKER_PID" ]; then
-    kill "$WORKER_PID" 2>/dev/null || true
-    wait "$WORKER_PID" 2>/dev/null || true
-  fi
+  kill_tree "$WEB_PID"
+  kill_tree "$WORKER_PID"
+  sleep 1
+  kill_tree_force "$WEB_PID"
+  kill_tree_force "$WORKER_PID"
   rm -f "$WORKER_LOG" "$WEB_LOG"
   exit "$rc"
 }
 trap cleanup EXIT INT TERM
 
-(
-  cd "$ROOT/worker"
-  exec pnpm exec dotenv -e ../.env -- node dist/index.js
-) >"$WORKER_LOG" 2>&1 &
+setsid bash -c 'cd "$1/worker" && exec pnpm exec dotenv -e ../.env -- node dist/index.js' _ "$ROOT" </dev/null >"$WORKER_LOG" 2>&1 &
 WORKER_PID=$!
 
-(
-  cd "$ROOT/web"
-  exec pnpm exec dotenv -e ../.env -- env NEXT_MANUAL_SIG_HANDLE=true next start -H 127.0.0.1 -p 3000
-) >"$WEB_LOG" 2>&1 &
+setsid bash -c 'cd "$1/web" && exec pnpm exec dotenv -e ../.env -- env NEXT_MANUAL_SIG_HANDLE=true next start -H 127.0.0.1 -p 3000' _ "$ROOT" </dev/null >"$WEB_LOG" 2>&1 &
 WEB_PID=$!
 
 wait_health() {
