@@ -4,7 +4,7 @@ _stages: [
 	{
 		name:      "checks"
 		matrix:    true
-		select:    [pipeline.#jobs.fmt, pipeline.#jobs.lint, pipeline.#jobs.typecheck, pipeline.#jobs.build, pipeline.#jobs.test, "test_client"]
+		select:    [pipeline.#jobs.fmt, pipeline.#jobs.lint, pipeline.#jobs.typecheck, pipeline.#jobs.build, pipeline.#jobs.test, "test_client", "e2e_server"]
 		fail_fast: false
 		services:  "on_demand"
 	},

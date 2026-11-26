@@ -448,6 +448,10 @@ pipeline: {
 							"web/src/__tests__/server/slack-integration.servertest.ts",
 						]
 						incidental_reads: ["worker/package.json", "worker/tsconfig.json"]
+						not_run: [{
+							tests: ["web/src/__tests__/server/media.servertest.ts"]
+							reason: "requires MinIO S3 presigned header/checksum enforcement (SeaweedFS returns 200/400 instead of 403/ChecksumMismatch)"
+						}]
 					}
 					tasks: [
 						{
@@ -642,7 +646,6 @@ pipeline: {
 							"web/src/__tests__/server/daily-metrics-api.servertest.ts",
 							"web/src/__tests__/server/mcp-apps-widget-page.servertest.ts",
 							"web/src/__tests__/server/mcp-auth.servertest.ts",
-							"web/src/__tests__/server/media.servertest.ts",
 							"web/src/__tests__/server/prompts-trpc.servertest.ts",
 							"web/src/__tests__/server/scores-api-v2.servertest.ts",
 							"web/src/__tests__/server/sessions-api.servertest.ts",

@@ -17,7 +17,7 @@ if [ -n "${DATABASE_URL:-}" ]; then
   export DATABASE_URL="${DATABASE_URL//127.0.0.1/localhost}"
 fi
 
-LANGFUSE_SEED_DB=1 "$ROOT/.enact/scripts/prepare-dbs.sh"
+"$ROOT/.enact/scripts/prepare-dbs.sh"
 
 WORKER_LOG="/tmp/langfuse-api-worker-$$.log"
 WEB_LOG="/tmp/langfuse-api-web-$$.log"
