@@ -154,7 +154,6 @@ jobs:
                 [ -n "$entry" ] && raw_cone+=("$entry")
             done <<<"$ENACT_SPARSE_CONE"
             cone=()
-            to_check=()
             if [ "${#raw_cone[@]}" -gt 0 ]; then
                 for entry in "${raw_cone[@]}"; do
                     case "$entry" in
@@ -162,28 +161,17 @@ jobs:
                             cone+=("$entry")
                             ;;
                         *)
-                            to_check+=("$entry")
+                            kind=$(git cat-file -t "$GITHUB_SHA:$entry" 2>/dev/null || true)
+                            if [ "$kind" = "blob" ]; then
+                                case "$entry" in
+                                    */*) cone+=("${entry%/*}/.enact-direct-files") ;;
+                                esac
+                            else
+                                cone+=("$entry")
+                            fi
                             ;;
                     esac
                 done
-            fi
-            if [ "${#to_check[@]}" -gt 0 ]; then
-                idx=0
-                while IFS= read -r kind; do
-                    entry="${to_check[$idx]}"
-                    idx=$((idx + 1))
-                    if [ "$kind" = "blob" ]; then
-                        case "$entry" in
-                            */*) cone+=("${entry%/*}/.enact-direct-files") ;;
-                        esac
-                    else
-                        cone+=("$entry")
-                    fi
-                done < <(
-                    for entry in "${to_check[@]}"; do
-                        printf '%s:%s\n' "$GITHUB_SHA" "$entry"
-                    done | git cat-file --batch-check='%(objecttype)'
-                )
             fi
             if [ "${#cone[@]}" -gt 0 ]; then
                 git sparse-checkout set --cone "${cone[@]}"
@@ -357,7 +345,7 @@ jobs:
       if: ${{ (toJson(matrix.output_keys) != 'null') && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
       run: |-
         cat > "$ENACT_OUTPUTS_PRODUCERS_FILE" <<'PRODUCERS_JSON'
-        {"-langfuse-ee--build":{"job":"@langfuse/ee:build","paths":"ee/dist\n.enact/state/outputs/-langfuse-ee--build.key\n.enact/state/outputs/-langfuse-ee--build.manifest-v1.json","arch_independent":true},"-langfuse-icons--build":{"job":"@langfuse/icons:build","paths":"packages/icons/dist\n.enact/state/outputs/-langfuse-icons--build.key\n.enact/state/outputs/-langfuse-icons--build.manifest-v1.json","arch_independent":true},"-langfuse-native--build":{"job":"@langfuse/native:build","paths":"packages/native/*.node\n.enact/state/outputs/-langfuse-native--build.key\n.enact/state/outputs/-langfuse-native--build.manifest-v1.json"},"-langfuse-shared--build":{"job":"@langfuse/shared:build","paths":"packages/shared/dist\n.enact/state/outputs/-langfuse-shared--build.key\n.enact/state/outputs/-langfuse-shared--build.manifest-v1.json","arch_independent":true},"-repo-eslint-plugin--build":{"job":"@repo/eslint-plugin:build","paths":"packages/eslint-plugin/dist\n.enact/state/outputs/-repo-eslint-plugin--build.key\n.enact/state/outputs/-repo-eslint-plugin--build.manifest-v1.json","arch_independent":true}}
+        {"-langfuse-ee--build":{"job":"@langfuse/ee:build","paths":"ee/dist\n.enact/state/outputs/-langfuse-ee--build.key\n.enact/state/outputs/-langfuse-ee--build.manifest-v1.json","arch_independent":true},"-langfuse-icons--build":{"job":"@langfuse/icons:build","paths":"packages/icons/dist\n.enact/state/outputs/-langfuse-icons--build.key\n.enact/state/outputs/-langfuse-icons--build.manifest-v1.json","arch_independent":true},"-langfuse-native--build":{"job":"@langfuse/native:build","paths":"packages/native/*.node\n.enact/state/outputs/-langfuse-native--build.key\n.enact/state/outputs/-langfuse-native--build.manifest-v1.json"},"-langfuse-shared--build":{"job":"@langfuse/shared:build","paths":"packages/shared/dist\n.enact/state/outputs/-langfuse-shared--build.key\n.enact/state/outputs/-langfuse-shared--build.manifest-v1.json","arch_independent":true},"-repo-eslint-plugin--build":{"job":"@repo/eslint-plugin:build","paths":"packages/eslint-plugin/dist\n.enact/state/outputs/-repo-eslint-plugin--build.key\n.enact/state/outputs/-repo-eslint-plugin--build.manifest-v1.json","arch_independent":true},"web--build":{"job":"web:build","paths":"web/.next\n.enact/state/outputs/web--build.key\n.enact/state/outputs/web--build.manifest-v1.json","arch_independent":true},"worker--build":{"job":"worker:build","paths":"worker/dist\n.enact/state/outputs/worker--build.key\n.enact/state/outputs/worker--build.manifest-v1.json"}}
         PRODUCERS_JSON
       env:
         ENACT_OUTPUTS_PRODUCERS_FILE: ${{ runner.temp }}/enact-outputs-producers.json
@@ -476,6 +464,44 @@ jobs:
       uses: actions/download-artifact@v8
       with:
         name: enact-outputs--repo-eslint-plugin--build-${{ runner.os }}
+        path: '.'
+    - name: Restore Built Outputs (web:build)
+      id: outputs-web--build
+      if: ${{ (matrix.output_keys['web--build'] != '' && steps.outputs-host.outputs['web--build'] != 'true' && steps.outputs-remote.outputs['web--build'] != 'true') && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
+      continue-on-error: true
+      uses: actions/cache/restore@v6
+      with:
+        key: enact-outputs-web--build-${{ runner.os }}-${{ matrix.output_keys['web--build'] }}
+        path: |-
+          web/.next
+          .enact/state/outputs/web--build.key
+          .enact/state/outputs/web--build.manifest-v1.json
+    - name: Restore Built Outputs Artifact (web:build)
+      id: outputs-artifact-web--build
+      if: ${{ (matrix.output_keys['web--build'] != '' && steps.outputs-host.outputs['web--build'] != 'true' && steps.outputs-remote.outputs['web--build'] != 'true' && steps.outputs-web--build.outputs.cache-hit != 'true') && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
+      continue-on-error: true
+      uses: actions/download-artifact@v8
+      with:
+        name: enact-outputs-web--build-${{ runner.os }}
+        path: '.'
+    - name: Restore Built Outputs (worker:build)
+      id: outputs-worker--build
+      if: ${{ (matrix.output_keys['worker--build'] != '' && steps.outputs-host.outputs['worker--build'] != 'true' && steps.outputs-remote.outputs['worker--build'] != 'true') && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
+      continue-on-error: true
+      uses: actions/cache/restore@v6
+      with:
+        key: enact-outputs-worker--build-${{ runner.os }}-${{ runner.arch }}-${{ matrix.output_keys['worker--build'] }}
+        path: |-
+          worker/dist
+          .enact/state/outputs/worker--build.key
+          .enact/state/outputs/worker--build.manifest-v1.json
+    - name: Restore Built Outputs Artifact (worker:build)
+      id: outputs-artifact-worker--build
+      if: ${{ (matrix.output_keys['worker--build'] != '' && steps.outputs-host.outputs['worker--build'] != 'true' && steps.outputs-remote.outputs['worker--build'] != 'true' && steps.outputs-worker--build.outputs.cache-hit != 'true') && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
+      continue-on-error: true
+      uses: actions/download-artifact@v8
+      with:
+        name: enact-outputs-worker--build-${{ runner.os }}-${{ runner.arch }}
         path: '.'
     - name: Require Built Outputs
       if: ${{ (toJson(matrix.output_keys) != 'null') && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
@@ -811,28 +837,6 @@ jobs:
         echo "::error::Container cgroup OOM-killed a process (oom_kill=${oom}, memory.peak=${peak}, memory.max=${limit})"
         fi
         fi
-    - name: Diagnose Disk & Btrfs Qgroup on Failure
-      if: ${{ (failure()) && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
-      run: |-
-        df -h || true
-        df -i || true
-        btrfs qgroup show -reF / 2>/dev/null || true
-    - name: Log Cgroup Memory & PSI Telemetry
-      if: ${{ (always()) && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
-      run: |-
-        if [ -d /sys/fs/cgroup ]; then
-        anon=$(awk '$1 == "anon" { print $2 }' /sys/fs/cgroup/memory.stat 2>/dev/null || echo unknown)
-        kernel=$(awk '$1 == "kernel" { print $2 }' /sys/fs/cgroup/memory.stat 2>/dev/null || echo unknown)
-        peak=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo unknown)
-        limit=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo unknown)
-        high=$(awk '$1 == "high" { print $2 }' /sys/fs/cgroup/memory.events 2>/dev/null || echo 0)
-        max_ev=$(awk '$1 == "max" { print $2 }' /sys/fs/cgroup/memory.events 2>/dev/null || echo 0)
-        oom=$(awk '$1 == "oom_kill" { print $2 }' /sys/fs/cgroup/memory.events 2>/dev/null || echo 0)
-        sampled=$(cat "${GHA_ANON_PEAK_FILE:-/dev/null}" 2>/dev/null || true)
-        [ -n "$sampled" ] || sampled="nonreclaim_peak_sampled=unknown"
-        psi=$(tr '\n' ' ' < /sys/fs/cgroup/memory.pressure 2>/dev/null || echo unavailable)
-        echo "cgroup telemetry: anon=${anon} kernel=${kernel} peak=${peak} max=${limit} events(high=${high:-0},max=${max_ev:-0},oom_kill=${oom:-0}) ${sampled} psi=${psi}"
-        fi
     - name: Push Updated Dependencies to the Remote Cache
       if: ${{ (success() && env.ENACT_REMOTE_SAVE_EVENT == 'true' && env.ENACT_HAS_SIGNING_KEY == 'true') && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
       continue-on-error: true
@@ -862,7 +866,7 @@ jobs:
           .enact/state/runs/*/services/*.log
         retention-days: "1"
     - name: Upload Recorded Footprints
-      if: ${{ (success() && (github.event_name == 'push' && github.ref_name == github.event.repository.default_branch || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref != github.event.repository.default_branch || github.event_name == 'workflow_dispatch' && inputs.warm_reach == 'true' && github.ref_name == github.event.repository.default_branch)) && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
+      if: ${{ (always() && (github.event_name == 'push' && github.ref_name == github.event.repository.default_branch || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref != github.event.repository.default_branch || github.event_name == 'workflow_dispatch' && inputs.warm_reach == 'true' && github.ref_name == github.event.repository.default_branch)) && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
       continue-on-error: true
       uses: actions/upload-artifact@v7
       with:

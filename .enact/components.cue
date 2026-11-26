@@ -10,6 +10,8 @@ pipeline: {
 		{outputs: ["packages/eslint-plugin/dist", "packages/eslint-plugin/dist/**"], inputs: ["packages/eslint-plugin/src/**", "packages/eslint-plugin/package.json", "packages/eslint-plugin/tsconfig.json"]},
 		{outputs: ["packages/native/*.node", "packages/native/target", "packages/native/target/**"], inputs: ["packages/native/src/**", "packages/native/Cargo.toml", "packages/native/Cargo.lock", "packages/native/package.json"]},
 		{outputs: ["ai-gateway/target", "ai-gateway/target/**"], inputs: ["ai-gateway/src/**", "ai-gateway/Cargo.toml", "ai-gateway/Cargo.lock"]},
+		{outputs: ["worker/dist", "worker/dist/**"], inputs: ["worker/src/**", "worker/package.json", "worker/tsconfig.json", "packages/shared/src/**", "packages/native/src/**"]},
+		{outputs: ["web/.next", "web/.next/**"], inputs: ["web/src/**", "web/public/**", "web/package.json", "web/next.config.mjs", "web/tsconfig.json", "packages/icons/src/**", "packages/shared/src/**"]},
 	]
 	components: {
 		root: {
@@ -336,6 +338,31 @@ pipeline: {
 					needs:    ["@langfuse/icons:build", "@langfuse/shared:build"]
 					tasks: [{command: "pnpm --filter web run typecheck"}]
 				}
+				build: {
+					name:     "Build web"
+					services: false
+					builds:   true
+					needs:    ["@langfuse/icons:build", "@langfuse/shared:build"]
+					resources: {
+						cpus:      4
+						memory_mb: 7168
+					}
+					outputs: {
+						paths: ["web/.next"]
+						key: ["web/**", "packages/icons/src/**", "packages/shared/src/**", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]
+						arch_independent: true
+					}
+					tasks: [{
+						command: "pnpm --filter web run build && rm -rf web/.next/cache"
+						timeout: "20m"
+						env: {
+							"INLINE_RUNTIME_CHUNK":    "false"
+							"NEXT_DISABLE_BUILD_CACHE": "true"
+							"NEXT_IGNORE_BUILD_ERRORS": "true"
+							"NODE_OPTIONS":            "--max_old_space_size=6144"
+						}
+					}]
+				}
 				test_client: {
 					name:     "run web Vitest client suite"
 					services: false
@@ -421,65 +448,6 @@ pipeline: {
 							"web/src/__tests__/server/slack-integration.servertest.ts",
 						]
 						incidental_reads: ["worker/package.json", "worker/tsconfig.json"]
-						not_run: [
-							{
-								tests: ["web/src/__e2e__/**"]
-								reason: "browser and full-stack e2e suites require running Next.js + ClickHouse + Playwright"
-							},
-							{
-								tests: [
-									"web/src/__tests__/server/annotation-queue-assignments-api.servertest.ts",
-									"web/src/__tests__/server/annotation-queues-api.servertest.ts",
-									"web/src/__tests__/server/blob-storage-integration-api.servertest.ts",
-									"web/src/__tests__/server/blob-storage-integration-status-api.servertest.ts",
-									"web/src/__tests__/server/comments-api.servertest.ts",
-									"web/src/__tests__/server/datasets-api.servertest.ts",
-									"web/src/__tests__/server/datasets-schema-validation.servertest.ts",
-									"web/src/__tests__/server/deprecation-signal.servertest.ts",
-									"web/src/__tests__/server/evaluation-rules-public-api.servertest.ts",
-									"web/src/__tests__/server/evaluator-history-public-api.servertest.ts",
-									"web/src/__tests__/server/evaluators-public-api.servertest.ts",
-									"web/src/__tests__/server/experiments-public-api.servertest.ts",
-									"web/src/__tests__/server/ingestion-api.servertest.ts",
-									"web/src/__tests__/server/llm-connections-api.servertest.ts",
-									"web/src/__tests__/server/memberships-api.servertest.ts",
-									"web/src/__tests__/server/metrics-api.servertest.ts",
-									"web/src/__tests__/server/metrics-v2-api.servertest.ts",
-									"web/src/__tests__/server/model-definitions.servertest.ts",
-									"web/src/__tests__/server/model-pricing-tiers.servertest.ts",
-									"web/src/__tests__/server/multilingual-fulltext-search.servertest.ts",
-									"web/src/__tests__/server/observation-api.servertest.ts",
-									"web/src/__tests__/server/observations-api-v2.servertest.ts",
-									"web/src/__tests__/server/observations-api.servertest.ts",
-									"web/src/__tests__/server/org-model-definitions.servertest.ts",
-									"web/src/__tests__/server/organization-llm-connections-api.servertest.ts",
-									"web/src/__tests__/server/organizations-api.servertest.ts",
-									"web/src/__tests__/server/otel-api.servertest.ts",
-									"web/src/__tests__/server/projects-api.servertest.ts",
-									"web/src/__tests__/server/prompts.v1.servertest.ts",
-									"web/src/__tests__/server/prompts.v2.servertest.ts",
-									"web/src/__tests__/server/scim-api.servertest.ts",
-									"web/src/__tests__/server/score-configs.servertest.ts",
-									"web/src/__tests__/server/scores-api-v1.servertest.ts",
-									"web/src/__tests__/server/scores-api-v3.servertest.ts",
-									"web/src/__tests__/server/skill-file-contents.servertest.ts",
-									"web/src/__tests__/server/traces-api.servertest.ts",
-									"web/src/__tests__/server/unstable-dashboard-widgets-api.servertest.ts",
-									"web/src/__tests__/server/unstable-dashboards-api.servertest.ts",
-									"web/src/__tests__/server/code-eval-test-run-trpc.servertest.ts",
-									"web/src/__tests__/server/daily-metrics-api.servertest.ts",
-									"web/src/__tests__/server/mcp-apps-widget-page.servertest.ts",
-									"web/src/__tests__/server/mcp-auth.servertest.ts",
-									"web/src/__tests__/server/media.servertest.ts",
-									"web/src/__tests__/server/prompts-trpc.servertest.ts",
-									"web/src/__tests__/server/scores-api-v2.servertest.ts",
-									"web/src/__tests__/server/sessions-api.servertest.ts",
-									"web/src/__tests__/server/sessions.servertest.ts",
-									"web/src/__tests__/server/slack-integration.servertest.ts",
-								]
-								reason: "HTTP API calls (makeAPICall/makeZodVerifiedAPICall/fetch localhost:3000) and background worker daemon consumers (prompts-trpc, code-eval-test-run-trpc) require a running Next.js + worker server"
-							},
-						]
 					}
 					tasks: [
 						{
@@ -553,7 +521,11 @@ pipeline: {
 					name:     "Build worker"
 					services: false
 					builds:   true
-					needs:    ["@langfuse/native:build", "@langfuse/shared:build", "@repo/eslint-plugin:build"]
+					needs:    ["@langfuse/native:build", "@langfuse/shared:build"]
+					outputs: {
+						paths: ["worker/dist"]
+						key: ["worker/**", "packages/shared/src/**", "packages/native/src/**", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]
+					}
 					tasks: [{
 						command: "pnpm --filter worker run build"
 						timeout: "15m"
@@ -575,7 +547,7 @@ pipeline: {
 						cpus:      2
 						memory_mb: 5120
 					}
-					needs: ["@repo/eslint-plugin:build", "@langfuse/shared:build", "@langfuse/native:build"]
+					needs: ["@langfuse/shared:build", "@langfuse/native:build"]
 					tasks: [
 						{
 							name:    "Prepare databases, seed data, and S3 bucket"
@@ -600,6 +572,122 @@ pipeline: {
 							}
 						},
 					]
+				}
+			}
+		}
+		// HTTP API + server e2e suite requiring running Next.js + worker daemons
+		web_api: {
+			name:       "web-api"
+			title:      "web HTTP API and server e2e suite"
+			root:       "web"
+			watch_paths: []
+			depends_on: ["web", "worker"]
+			resources: {
+				cpus:      2
+				memory_mb: 6144
+			}
+			services: {
+				postgres:   pipeline.services.postgres
+				redis:      pipeline.services.redis
+				clickhouse: pipeline.services.clickhouse
+				seaweedfs:  pipeline.services.seaweedfs
+			}
+			jobs: {
+				test: {
+					name:     "run web HTTP API and server e2e suite"
+					shards:   2
+					recorder: "own_linux"
+					needs:    ["web:build", "worker:build"]
+					target_scope: {
+						tests: [
+							"web/src/__e2e__/*.servertest.ts",
+							"web/src/__tests__/server/annotation-queue-assignments-api.servertest.ts",
+							"web/src/__tests__/server/annotation-queues-api.servertest.ts",
+							"web/src/__tests__/server/blob-storage-integration-api.servertest.ts",
+							"web/src/__tests__/server/blob-storage-integration-status-api.servertest.ts",
+							"web/src/__tests__/server/comments-api.servertest.ts",
+							"web/src/__tests__/server/datasets-api.servertest.ts",
+							"web/src/__tests__/server/datasets-schema-validation.servertest.ts",
+							"web/src/__tests__/server/deprecation-signal.servertest.ts",
+							"web/src/__tests__/server/evaluation-rules-public-api.servertest.ts",
+							"web/src/__tests__/server/evaluator-history-public-api.servertest.ts",
+							"web/src/__tests__/server/evaluators-public-api.servertest.ts",
+							"web/src/__tests__/server/experiments-public-api.servertest.ts",
+							"web/src/__tests__/server/ingestion-api.servertest.ts",
+							"web/src/__tests__/server/llm-connections-api.servertest.ts",
+							"web/src/__tests__/server/memberships-api.servertest.ts",
+							"web/src/__tests__/server/metrics-api.servertest.ts",
+							"web/src/__tests__/server/metrics-v2-api.servertest.ts",
+							"web/src/__tests__/server/model-definitions.servertest.ts",
+							"web/src/__tests__/server/model-pricing-tiers.servertest.ts",
+							"web/src/__tests__/server/multilingual-fulltext-search.servertest.ts",
+							"web/src/__tests__/server/observation-api.servertest.ts",
+							"web/src/__tests__/server/observations-api-v2.servertest.ts",
+							"web/src/__tests__/server/observations-api.servertest.ts",
+							"web/src/__tests__/server/org-model-definitions.servertest.ts",
+							"web/src/__tests__/server/organization-llm-connections-api.servertest.ts",
+							"web/src/__tests__/server/organizations-api.servertest.ts",
+							"web/src/__tests__/server/otel-api.servertest.ts",
+							"web/src/__tests__/server/projects-api.servertest.ts",
+							"web/src/__tests__/server/prompts.v1.servertest.ts",
+							"web/src/__tests__/server/prompts.v2.servertest.ts",
+							"web/src/__tests__/server/scim-api.servertest.ts",
+							"web/src/__tests__/server/score-configs.servertest.ts",
+							"web/src/__tests__/server/scores-api-v1.servertest.ts",
+							"web/src/__tests__/server/scores-api-v3.servertest.ts",
+							"web/src/__tests__/server/skill-file-contents.servertest.ts",
+							"web/src/__tests__/server/traces-api.servertest.ts",
+							"web/src/__tests__/server/unstable-dashboard-widgets-api.servertest.ts",
+							"web/src/__tests__/server/unstable-dashboards-api.servertest.ts",
+							"web/src/__tests__/server/code-eval-test-run-trpc.servertest.ts",
+							"web/src/__tests__/server/daily-metrics-api.servertest.ts",
+							"web/src/__tests__/server/mcp-apps-widget-page.servertest.ts",
+							"web/src/__tests__/server/mcp-auth.servertest.ts",
+							"web/src/__tests__/server/media.servertest.ts",
+							"web/src/__tests__/server/prompts-trpc.servertest.ts",
+							"web/src/__tests__/server/scores-api-v2.servertest.ts",
+							"web/src/__tests__/server/sessions-api.servertest.ts",
+							"web/src/__tests__/server/sessions.servertest.ts",
+							"web/src/__tests__/server/slack-integration.servertest.ts",
+						]
+					}
+					tasks: [{
+						name:      "Run web HTTP API and server e2e suite"
+						command:   "../.enact/scripts/run-web-api-tests.sh {relative_targets}"
+						timeout:   "30m"
+						unset_env: ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_ENDPOINT_URL"]
+						env: {
+							"NODE_ENV":                                        "test"
+							"NODE_VERSION":                                    "24"
+							"LANGFUSE_S3_EVENT_UPLOAD_BUCKET":                 "langfuse"
+							"ENCRYPTION_KEY":                                  "0000000000000000000000000000000000000000000000000000000000000000"
+							"SALT":                                            "salt"
+							"NEXTAUTH_SECRET":                                 "secret"
+							"NEXTAUTH_URL":                                    "http://localhost:3000"
+							"VITEST_MAX_WORKERS":                              "2"
+							"LANGFUSE_EE_LICENSE_KEY":                         "langfuse_ee_test"
+							"LANGFUSE_CACHE_PROMPT_ENABLED":                   "false"
+							"LANGFUSE_INGESTION_QUEUE_DELAY_MS":               "1"
+							"LANGFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS": "1"
+							"LANGFUSE_TRACE_DELETE_DELAY_MS":                  "1"
+							"LANGFUSE_TRACE_DELETE_CONCURRENCY":               "100"
+							"ADMIN_API_KEY":                                   "admin-api-key"
+							"LANGFUSE_SKIP_EVALUATOR_MODEL_CALL_VALIDATION":   "true"
+							"LANGFUSE_ENABLE_SCORES_V3_API":                   "true"
+							"LANGFUSE_AUDIT_LOG_RELAY_ENABLED":                "false"
+							"LANGFUSE_AI_GATEWAY_DEPLOYED":                    "true"
+							"LANGFUSE_INIT_ORG_ID":                            "seed-org-id"
+							"LANGFUSE_INIT_ORG_NAME":                          "Seed Org"
+							"LANGFUSE_INIT_ORG_CLOUD_PLAN":                    "Team"
+							"LANGFUSE_INIT_PROJECT_ID":                        "7a88fb47-b4e2-43b8-a06c-a5ce950dc53a"
+							"LANGFUSE_INIT_PROJECT_NAME":                      "Seed Project"
+							"LANGFUSE_INIT_PROJECT_PUBLIC_KEY":                "pk-lf-1234567890"
+							"LANGFUSE_INIT_PROJECT_SECRET_KEY":                "sk-lf-1234567890"
+							"LANGFUSE_INIT_USER_EMAIL":                        "demo@langfuse.com"
+							"LANGFUSE_INIT_USER_NAME":                         "Demo User"
+							"LANGFUSE_INIT_USER_PASSWORD":                     "password"
+						}
+					}]
 				}
 			}
 		}
