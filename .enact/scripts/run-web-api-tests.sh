@@ -17,7 +17,8 @@ if [ -n "${DATABASE_URL:-}" ]; then
   export DATABASE_URL="${DATABASE_URL//127.0.0.1/localhost}"
 fi
 
-"$ROOT/.enact/scripts/prepare-dbs.sh"
+LANGFUSE_SEED_DB=1 "$ROOT/.enact/scripts/prepare-dbs.sh"
+psql "$DATABASE_URL" -qc "UPDATE projects SET name = 'Seed Project' WHERE id = '7a88fb47-b4e2-43b8-a06c-a5ce950dc53a';"
 
 WORKER_LOG="/tmp/langfuse-api-worker-$$.log"
 WEB_LOG="/tmp/langfuse-api-web-$$.log"
