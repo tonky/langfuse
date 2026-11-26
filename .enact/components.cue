@@ -339,7 +339,7 @@ pipeline: {
 				test_client: {
 					name:     "run web Vitest client suite"
 					services: false
-					shards:   2
+					shards:   4
 					recorder: "own_linux"
 					needs:    ["@langfuse/icons:build", "@langfuse/shared:build"]
 					resources: {
@@ -354,7 +354,7 @@ pipeline: {
 						env: {
 							"NODE_ENV":           "test"
 							"NODE_VERSION":       "24"
-							"VITEST_MAX_WORKERS": "4"
+							"VITEST_MAX_WORKERS": "2"
 						}
 					}]
 				}
