@@ -500,7 +500,7 @@ pipeline: {
 								"SALT":                                          "salt"
 								"NEXTAUTH_SECRET":                               "secret"
 								"NEXTAUTH_URL":                                  "http://localhost:3000"
-								"VITEST_MAX_WORKERS":                            "3"
+								"VITEST_MAX_WORKERS":                            "2"
 								"LANGFUSE_EE_LICENSE_KEY":                       "langfuse_ee_test"
 								"LANGFUSE_CACHE_PROMPT_ENABLED":                 "false"
 								"LANGFUSE_INGESTION_QUEUE_DELAY_MS":             "1"
