@@ -38,24 +38,49 @@ if is_db_ready; then
   exit 0
 fi
 
-# Create SeaweedFS bucket used by event/batch/media upload integration tests.
-for _ in $(seq 1 30); do
-  if curl -fsS -o /dev/null "http://127.0.0.1:${S3_PORT}/" 2>/dev/null || curl -sS -o /dev/null "http://127.0.0.1:${S3_PORT}/langfuse" 2>/dev/null; then
-    break
-  fi
-  sleep 0.5
-done
-curl -fsS -X PUT "http://127.0.0.1:${S3_PORT}/langfuse" >/dev/null || true
+# Create SeaweedFS bucket in parallel with DB setup.
+(
+  for _ in $(seq 1 30); do
+    if curl -fsS -o /dev/null "http://127.0.0.1:${S3_PORT}/" 2>/dev/null || curl -sS -o /dev/null "http://127.0.0.1:${S3_PORT}/langfuse" 2>/dev/null; then
+      break
+    fi
+    sleep 0.5
+  done
+  curl -fsS -X PUT "http://127.0.0.1:${S3_PORT}/langfuse" >/dev/null || true
+) &
+S3_PID=$!
+
+# Run ClickHouse migrations + dev-tables in parallel with Postgres migrate/seed!
+(
+  pnpm --filter @langfuse/shared run ch:up
+  pnpm --filter @langfuse/shared run ch:dev-tables
+) &
+CH_PID=$!
 
 export DIRECT_URL="${DIRECT_URL:-$DATABASE_URL}"
 export SHADOW_DATABASE_URL="postgresql://postgres@127.0.0.1:${PG_PORT}/postgres_shadow"
-pnpm --filter @langfuse/shared exec prisma migrate deploy
-pnpm --filter @langfuse/shared run ch:up
-pnpm --filter @langfuse/shared run ch:dev-tables
 
+TEMPLATE_DIR="$ROOT/.enact/state/db-template"
 if [ "${LANGFUSE_SEED_DB:-0}" = "1" ]; then
-  pnpm --filter @langfuse/shared run db:seed
+  TEMPLATE_SQL="$TEMPLATE_DIR/pg-seeded.sql"
+else
+  TEMPLATE_SQL="$TEMPLATE_DIR/pg-migrated.sql"
 fi
+
+if [ -s "$TEMPLATE_SQL" ] && psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f "$TEMPLATE_SQL" >/dev/null 2>&1; then
+  :
+else
+  pnpm --filter @langfuse/shared exec prisma migrate deploy
+  if [ "${LANGFUSE_SEED_DB:-0}" = "1" ]; then
+    pnpm --filter @langfuse/shared run db:seed
+  fi
+  mkdir -p "$TEMPLATE_DIR"
+  pg_dump "$DATABASE_URL" --no-owner --no-privileges --clean --if-exists > "$TEMPLATE_SQL.tmp" 2>/dev/null \
+    && mv "$TEMPLATE_SQL.tmp" "$TEMPLATE_SQL" || rm -f "$TEMPLATE_SQL.tmp"
+fi
+
+wait "$CH_PID"
+wait "$S3_PID"
 
 if [ "${LANGFUSE_SEED_EXAMPLES:-0}" = "1" ]; then
   pnpm --filter @langfuse/shared run db:seed:examples
