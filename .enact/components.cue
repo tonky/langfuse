@@ -422,6 +422,10 @@ pipeline: {
 							"INLINE_RUNTIME_CHUNK":     "false"
 							"NEXT_IGNORE_BUILD_ERRORS": "true"
 							"NODE_OPTIONS":             "--max_old_space_size=6144"
+							"DATABASE_URL":             "postgresql://postgres@127.0.0.1:5432/postgres"
+							"CLICKHOUSE_URL":           "http://localhost:8123"
+							"CLICKHOUSE_USER":          "clickhouse"
+							"CLICKHOUSE_PASSWORD":      "clickhouse"
 						}
 					}]
 				}
