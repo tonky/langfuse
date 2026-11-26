@@ -71,3 +71,5 @@ export function VersionUpdateBannerView({
     </div>
   );
 }
+
+// canary scoping verification
