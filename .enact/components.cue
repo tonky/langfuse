@@ -11,8 +11,31 @@ pipeline: {
 		{outputs: ["packages/native/*.node", "packages/native/target", "packages/native/target/**"], inputs: ["packages/native/src/**", "packages/native/Cargo.toml", "packages/native/Cargo.lock", "packages/native/package.json"]},
 		{outputs: ["ai-gateway/target", "ai-gateway/target/**"], inputs: ["ai-gateway/src/**", "ai-gateway/Cargo.toml", "ai-gateway/Cargo.lock"]},
 		{outputs: ["worker/dist", "worker/dist/**"], inputs: ["worker/src/**", "worker/package.json", "worker/tsconfig.json", "packages/shared/src/**", "packages/native/src/**"]},
-		{outputs: ["web/.next", "web/.next/**"], inputs: ["web/src/**", "web/public/**", "web/package.json", "web/next.config.mjs", "web/tsconfig.json", "packages/icons/src/**", "packages/shared/src/**"]},
+		{outputs: ["web/.next", "web/.next/**"], inputs: ["web/src/pages/api/**", "web/src/server/**", "web/src/features/**/server/**", "web/src/ee/features/**/server/**", "web/src/env.mjs", "web/next.config.mjs", "web/package.json", "web/tsconfig.json", "packages/shared/src/**"]},
 	]
+	caches: {
+		web_tsbuildinfo: {
+			name:    "web TypeScript incremental build info"
+			paths:   ["web/.tsbuildinfo"]
+			key:     ["web/tsconfig.json", "pnpm-lock.yaml"]
+			refresh: "rolling"
+			used_by: {components: ["web"], jobs: ["typecheck"]}
+		}
+		web_next_cache: {
+			name:    "web Next.js build cache"
+			paths:   [".enact/state/next-cache"]
+			key:     ["web/next.config.mjs", "pnpm-lock.yaml"]
+			refresh: "rolling"
+			used_by: {components: ["web"], jobs: ["build"]}
+		}
+		pg_db_template: {
+			name:  "Pre-migrated Postgres SQL template"
+			paths: [".enact/state/db-template"]
+			key:   ["packages/shared/prisma/**"]
+			scope: "shared"
+			used_by: {components: ["@langfuse/shared", "web", "web-api", "worker"], jobs: ["test"]}
+		}
+	}
 	components: {
 		root: {
 			title: "Root configuration and manifests"
@@ -40,6 +63,7 @@ pipeline: {
 			name: "ai-gateway"
 			title: "ai-gateway crate and service"
 			root: "ai-gateway"
+			environment_file: ".enact/env/rust/enve.cue"
 			technology: ["rust", "typescript"]
 			watch_paths: ["ai-gateway/**"]
 			depends_on: ["rs-root", "js-root"]
@@ -61,7 +85,8 @@ pipeline: {
 			title: "@langfuse/ee package"
 			root: "ee"
 			watch_paths: ["ee/**"]
-			depends_on: ["@langfuse/shared", "@repo/oxlint-config", "@repo/typescript-config", "js-root"]
+			workspace_scope: include: ["packages/config-oxlint/**"]
+			depends_on: ["@langfuse/shared", "@repo/eslint-plugin", "@repo/typescript-config", "js-root"]
 			jobs: {
 				lint: {
 					needs: ["@repo/eslint-plugin:build"]
@@ -91,7 +116,28 @@ pipeline: {
 			title: "@repo/oxlint-config package"
 			root: "packages/config-oxlint"
 			watch_paths: ["packages/config-oxlint/**"]
+			workspace_scope: include: [
+				"ee/**",
+				"packages/icons/**",
+				"packages/in-app-agent-sandbox-runtime/package.json",
+				"packages/in-app-agent-sandbox-runtime/tsconfig.json",
+				"packages/native/**",
+				"packages/shared/**",
+				"web/**",
+				"worker/**",
+			]
 			depends_on: ["@repo/eslint-plugin", "js-root"]
+			jobs: {
+				lint: {
+					services: false
+					resources: {
+						cpus:      2
+						memory_mb: 7680
+					}
+					needs: ["@repo/eslint-plugin:build"]
+					tasks: [{command: "pnpm --filter @langfuse/ee --filter @langfuse/shared --filter web --filter worker run lint"}]
+				}
+			}
 		}
 		// from: packages/config-typescript/package.json
 		config_typescript: {
@@ -209,6 +255,7 @@ pipeline: {
 			name: "@langfuse/native"
 			title: "@langfuse/native Rust N-API addon"
 			root: "packages/native"
+			environment_file: ".enact/env/rust/enve.cue"
 			technology: ["rust", "typescript"]
 			watch_paths: ["packages/native/**"]
 			depends_on: ["rs-root", "js-root"]
@@ -247,8 +294,8 @@ pipeline: {
 				memory_mb: 4096
 			}
 			watch_paths: ["packages/shared/**"]
-			workspace_scope: include: ["ai-gateway/tests/fixtures/cost-cases.json"]
-			depends_on: ["@repo/oxlint-config", "@repo/typescript-config", "js-root"]
+			workspace_scope: include: ["ai-gateway/tests/fixtures/cost-cases.json", "packages/config-oxlint/**"]
+			depends_on: ["@repo/eslint-plugin", "@repo/typescript-config", "js-root"]
 			shards: 4
 			recorder: "own_linux"
 			services: {
@@ -275,8 +322,9 @@ pipeline: {
 					tasks: [{command: "pnpm --filter @langfuse/shared run build"}]
 				}
 				test: {
-					name:  "run shared tests"
-					needs: ["build"]
+					name:             "run shared tests"
+					environment_file: ".enact/env/services/enve.cue"
+					needs:            ["build"]
 					tasks: [{
 						command: "\"$ENACT_EXE\" helper vitest {relative_targets}"
 						timeout: "15m"
@@ -307,12 +355,13 @@ pipeline: {
 				"ee/package.json",
 				"ee/tsconfig.json",
 				"fern/**",
+				"packages/config-oxlint/**",
 				"packages/in-app-agent-sandbox-runtime/package.json",
 				"packages/in-app-agent-sandbox-runtime/tsconfig.json",
 				"scripts/code-eval-runners/**",
 				"scripts/vitest/**",
 			]
-			depends_on: ["@langfuse/icons", "@langfuse/shared", "@repo/langfuse-skills", "@repo/oxlint-config", "@repo/typescript-config", "js-root"]
+			depends_on: ["@langfuse/icons", "@langfuse/shared", "@repo/eslint-plugin", "@repo/langfuse-skills", "@repo/typescript-config", "js-root"]
 			resources: {
 				cpus:      2
 				memory_mb: 2560
@@ -353,13 +402,25 @@ pipeline: {
 						arch_independent: true
 					}
 					tasks: [{
-						command: "pnpm --filter web run build && rm -rf web/.next/cache"
+						command: """
+							set -euo pipefail
+							if [ -d ../.enact/state/next-cache ]; then
+							  mkdir -p .next
+							  rm -rf .next/cache
+							  mv ../.enact/state/next-cache .next/cache
+							fi
+							pnpm --filter web run build
+							if [ -d .next/cache ]; then
+							  mkdir -p ../.enact/state
+							  rm -rf ../.enact/state/next-cache
+							  mv .next/cache ../.enact/state/next-cache
+							fi
+							"""
 						timeout: "20m"
 						env: {
-							"INLINE_RUNTIME_CHUNK":    "false"
-							"NEXT_DISABLE_BUILD_CACHE": "true"
+							"INLINE_RUNTIME_CHUNK":     "false"
 							"NEXT_IGNORE_BUILD_ERRORS": "true"
-							"NODE_OPTIONS":            "--max_old_space_size=6144"
+							"NODE_OPTIONS":             "--max_old_space_size=6144"
 						}
 					}]
 				}
@@ -386,8 +447,9 @@ pipeline: {
 					}]
 				}
 				test: {
-					name:     "run web Vitest server suite"
-					shards:   4
+					name:             "run web Vitest server suite"
+					environment_file: ".enact/env/services/enve.cue"
+					shards:           4
 					recorder: "own_linux"
 					needs:    ["@langfuse/icons:build", "@langfuse/shared:build"]
 					resources: {
@@ -501,8 +563,8 @@ pipeline: {
 			title: "worker package"
 			root: "worker"
 			watch_paths: ["worker/**"]
-			workspace_scope: include: ["scripts/vitest/**"]
-			depends_on: ["@langfuse/native", "@langfuse/shared", "@repo/langfuse-skills", "@repo/oxlint-config", "@repo/typescript-config", "js-root"]
+			workspace_scope: include: ["packages/config-oxlint/**", "scripts/vitest/**"]
+			depends_on: ["@langfuse/native", "@langfuse/shared", "@repo/eslint-plugin", "@repo/langfuse-skills", "@repo/typescript-config", "js-root"]
 			shards: 4
 			recorder: "own_linux"
 			services: {
@@ -552,7 +614,8 @@ pipeline: {
 					tasks: [{command: "pnpm --filter worker run typecheck"}]
 				}
 				test: {
-					name: "run tests"
+					name:             "run tests"
+					environment_file: ".enact/env/services/enve.cue"
 					resources: {
 						cpus:      2
 						memory_mb: 5120
@@ -604,8 +667,9 @@ pipeline: {
 			}
 			jobs: {
 				test: {
-					name:     "run web HTTP API and server e2e suite"
-					shards:   2
+					name:             "run web HTTP API and server e2e suite"
+					environment_file: ".enact/env/services/enve.cue"
+					shards:           2
 					recorder: "own_linux"
 					needs:    ["web:build", "worker:build"]
 					target_scope: {

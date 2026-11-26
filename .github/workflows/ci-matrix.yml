@@ -154,6 +154,7 @@ jobs:
                 [ -n "$entry" ] && raw_cone+=("$entry")
             done <<<"$ENACT_SPARSE_CONE"
             cone=()
+            to_check=()
             if [ "${#raw_cone[@]}" -gt 0 ]; then
                 for entry in "${raw_cone[@]}"; do
                     case "$entry" in
@@ -161,17 +162,28 @@ jobs:
                             cone+=("$entry")
                             ;;
                         *)
-                            kind=$(git cat-file -t "$GITHUB_SHA:$entry" 2>/dev/null || true)
-                            if [ "$kind" = "blob" ]; then
-                                case "$entry" in
-                                    */*) cone+=("${entry%/*}/.enact-direct-files") ;;
-                                esac
-                            else
-                                cone+=("$entry")
-                            fi
+                            to_check+=("$entry")
                             ;;
                     esac
                 done
+            fi
+            if [ "${#to_check[@]}" -gt 0 ]; then
+                idx=0
+                while IFS= read -r kind; do
+                    entry="${to_check[$idx]}"
+                    idx=$((idx + 1))
+                    if [ "$kind" = "blob" ]; then
+                        case "$entry" in
+                            */*) cone+=("${entry%/*}/.enact-direct-files") ;;
+                        esac
+                    else
+                        cone+=("$entry")
+                    fi
+                done < <(
+                    for entry in "${to_check[@]}"; do
+                        printf '%s:%s\n' "$GITHUB_SHA" "$entry"
+                    done | git cat-file --batch-check='%(objecttype)'
+                )
             fi
             if [ "${#cone[@]}" -gt 0 ]; then
                 git sparse-checkout set --cone "${cone[@]}"
@@ -685,6 +697,53 @@ jobs:
             .enact/state/pnpm-cache
             node_modules/.cache
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-node-v4-
+      - name: Restore Cache [Pre-migrated Postgres SQL template]
+        id: cache_pg_db_template
+        if: ${{ (contains(format(',{0},', matrix.caches), ',pg_db_template,')) && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/restore@v6
+        with:
+          key: pg_db_template-${{ runner.os }}-${{ hashFiles('packages/shared/prisma/**') }}
+          path: .enact/state/db-template
+          restore-keys: pg_db_template-${{ runner.os }}-
+      - name: Restore Cache [web Next.js build cache]
+        id: cache_web_next_cache
+        if: ${{ (contains(format(',{0},', matrix.caches), ',web_next_cache,')) && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/restore@v6
+        with:
+          key: web_next_cache-${{ runner.os }}-${{ hashFiles('web/next.config.mjs', 'pnpm-lock.yaml') }}-${{ github.sha }}
+          path: .enact/state/next-cache
+          restore-keys: |-
+            web_next_cache-${{ runner.os }}-${{ hashFiles('web/next.config.mjs', 'pnpm-lock.yaml') }}-
+            web_next_cache-${{ runner.os }}-
+      - name: Restore Cache [web TypeScript incremental build info]
+        id: cache_web_tsbuildinfo
+        if: ${{ (contains(format(',{0},', matrix.caches), ',web_tsbuildinfo,')) && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/restore@v6
+        with:
+          key: web_tsbuildinfo-${{ runner.os }}-${{ hashFiles('web/tsconfig.json', 'pnpm-lock.yaml') }}-${{ github.sha }}
+          path: web/.tsbuildinfo
+          restore-keys: |-
+            web_tsbuildinfo-${{ runner.os }}-${{ hashFiles('web/tsconfig.json', 'pnpm-lock.yaml') }}-
+            web_tsbuildinfo-${{ runner.os }}-
+      - name: Pull Dependencies via enve
+        if: ${{ !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
+        run: enact ci deps pull --component --remote signed
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID || env.R2_ACCESS_KEY_ID }}
+          AWS_REGION: auto
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY || env.R2_SECRET_ACCESS_KEY }}
+          ENACT_COMPONENT_DIR: ${{ matrix.component_dir }}
+          ENACT_ENVIRONMENT_FILE: ${{ matrix.environment_file || '' }}
+          ENACT_JOB_SERVICES: ${{ matrix.services }}
+          ENACT_PREPARE_ENVIRONMENT_FILES: ${{ toJSON(matrix.preparation_environment_files || fromJSON('[]')) }}
+          ENACT_R2_BUCKET: ${{ secrets.R2_BUCKET || env.R2_BUCKET }}
+          ENVE_CACHE_CONCURRENCY: "16"
+    - name: Check enve Stores into the Host Cache
+      if: ${{ (steps.runner_caches.outputs.host != '') && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
+      run: enact ci check-store
     - name: Record Restored Package Caches
       if: ${{ ((steps.runner_caches.outputs.host == '' && steps.python_l1_cache.outputs.cache-hit != 'true' || steps.runner_caches.outputs.host == '' && steps.node_l1_cache.outputs.cache-hit != 'true') && github.event_name != 'pull_request') && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
       continue-on-error: true
@@ -774,22 +833,6 @@ jobs:
         fi
       env:
         ENACT_SELECT_BASE: ${{ matrix.select_base }}
-    - name: Pull Dependencies via enve
-      if: ${{ !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
-      run: enact ci deps pull --component --remote signed
-      env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID || env.R2_ACCESS_KEY_ID }}
-        AWS_REGION: auto
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY || env.R2_SECRET_ACCESS_KEY }}
-        ENACT_COMPONENT_DIR: ${{ matrix.component_dir }}
-        ENACT_ENVIRONMENT_FILE: ${{ matrix.environment_file || '' }}
-        ENACT_JOB_SERVICES: ${{ matrix.services }}
-        ENACT_PREPARE_ENVIRONMENT_FILES: ${{ toJSON(matrix.preparation_environment_files || fromJSON('[]')) }}
-        ENACT_R2_BUCKET: ${{ secrets.R2_BUCKET || env.R2_BUCKET }}
-        ENVE_CACHE_CONCURRENCY: "16"
-    - name: Check enve Stores into the Host Cache
-      if: ${{ (steps.runner_caches.outputs.host != '') && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
-      run: enact ci check-store
     - name: Install Project Dependencies
       if: ${{ (contains(matrix.technology, 'typescript') || contains(matrix.technology, 'javascript') || contains(matrix.technology, 'node')) && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
       run: enact ci deps install node --manager pnpm --filters
@@ -837,6 +880,28 @@ jobs:
         echo "::error::Container cgroup OOM-killed a process (oom_kill=${oom}, memory.peak=${peak}, memory.max=${limit})"
         fi
         fi
+    - name: Diagnose Disk & Btrfs Qgroup on Failure
+      if: ${{ (failure()) && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
+      run: |-
+        df -h || true
+        df -i || true
+        btrfs qgroup show -reF / 2>/dev/null || true
+    - name: Log Cgroup Memory & PSI Telemetry
+      if: ${{ (always()) && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
+      run: |-
+        if [ -d /sys/fs/cgroup ]; then
+        anon=$(awk '$1 == "anon" { print $2 }' /sys/fs/cgroup/memory.stat 2>/dev/null || echo unknown)
+        kernel=$(awk '$1 == "kernel" { print $2 }' /sys/fs/cgroup/memory.stat 2>/dev/null || echo unknown)
+        peak=$(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo unknown)
+        limit=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo unknown)
+        high=$(awk '$1 == "high" { print $2 }' /sys/fs/cgroup/memory.events 2>/dev/null || echo 0)
+        max_ev=$(awk '$1 == "max" { print $2 }' /sys/fs/cgroup/memory.events 2>/dev/null || echo 0)
+        oom=$(awk '$1 == "oom_kill" { print $2 }' /sys/fs/cgroup/memory.events 2>/dev/null || echo 0)
+        sampled=$(cat "${GHA_ANON_PEAK_FILE:-/dev/null}" 2>/dev/null || true)
+        [ -n "$sampled" ] || sampled="nonreclaim_peak_sampled=unknown"
+        psi=$(tr '\n' ' ' < /sys/fs/cgroup/memory.pressure 2>/dev/null || echo unavailable)
+        echo "cgroup telemetry: anon=${anon} kernel=${kernel} peak=${peak} max=${limit} events(high=${high:-0},max=${max_ev:-0},oom_kill=${oom:-0}) ${sampled} psi=${psi}"
+        fi
     - name: Push Updated Dependencies to the Remote Cache
       if: ${{ (success() && env.ENACT_REMOTE_SAVE_EVENT == 'true' && env.ENACT_HAS_SIGNING_KEY == 'true') && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
       continue-on-error: true
@@ -866,7 +931,7 @@ jobs:
           .enact/state/runs/*/services/*.log
         retention-days: "1"
     - name: Upload Recorded Footprints
-      if: ${{ (always() && (github.event_name == 'push' && github.ref_name == github.event.repository.default_branch || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref != github.event.repository.default_branch || github.event_name == 'workflow_dispatch' && inputs.warm_reach == 'true' && github.ref_name == github.event.repository.default_branch)) && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
+      if: ${{ (success() && (github.event_name == 'push' && github.ref_name == github.event.repository.default_branch || github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref != github.event.repository.default_branch || github.event_name == 'workflow_dispatch' && inputs.warm_reach == 'true' && github.ref_name == github.event.repository.default_branch)) && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
       continue-on-error: true
       uses: actions/upload-artifact@v7
       with:
@@ -1071,6 +1136,27 @@ jobs:
         env:
           ENACT_RUST_HOST_KEY: ${{ runner.os }}-rust-target-${{ hashFiles('enve.lock', 'rust-toolchain.toml', 'rust-toolchain') }}-${{ matrix.cargo_cache }}
           ENACT_RUST_TARGET: target
+      - name: Save Cache [Pre-migrated Postgres SQL template]
+        if: ${{ ((env.ENACT_SAVE_EVENT == 'true' && contains(format(',{0},', matrix.caches), ',pg_db_template,') && (matrix.shard_index == '' || matrix.shard_index == 1 || matrix.shard_index == '1')) && github.event_name != 'pull_request' && steps.cache_pg_db_template.outputs.cache-hit != 'true') && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          key: ${{ steps.cache_pg_db_template.outputs.cache-primary-key }}
+          path: .enact/state/db-template
+      - name: Save Cache [web Next.js build cache]
+        if: ${{ ((env.ENACT_SAVE_EVENT == 'true' && contains(format(',{0},', matrix.caches), ',web_next_cache,') && (matrix.shard_index == '' || matrix.shard_index == 1 || matrix.shard_index == '1') && (github.event_name == 'schedule' || github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch || !startsWith(steps.cache_web_next_cache.outputs.cache-matched-key, format('web_next_cache-{0}-{1}-', runner.os, hashFiles('web/next.config.mjs', 'pnpm-lock.yaml'))))) && github.event_name != 'pull_request' && steps.cache_web_next_cache.outputs.cache-hit != 'true') && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          key: ${{ steps.cache_web_next_cache.outputs.cache-primary-key }}
+          path: .enact/state/next-cache
+      - name: Save Cache [web TypeScript incremental build info]
+        if: ${{ ((env.ENACT_SAVE_EVENT == 'true' && contains(format(',{0},', matrix.caches), ',web_tsbuildinfo,') && (matrix.shard_index == '' || matrix.shard_index == 1 || matrix.shard_index == '1') && (github.event_name == 'schedule' || github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch || !startsWith(steps.cache_web_tsbuildinfo.outputs.cache-matched-key, format('web_tsbuildinfo-{0}-{1}-', runner.os, hashFiles('web/tsconfig.json', 'pnpm-lock.yaml'))))) && github.event_name != 'pull_request' && steps.cache_web_tsbuildinfo.outputs.cache-hit != 'true') && !steps.skip.outputs.hit && steps.outputs-host-recover.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          key: ${{ steps.cache_web_tsbuildinfo.outputs.cache-primary-key }}
+          path: web/.tsbuildinfo
     - name: Save Built Outputs to the Host Cache
       if: ${{ success() && steps.runner_caches.outputs.host != '' && !steps.skip.outputs.hit && matrix.output_key != '' }}
       continue-on-error: true
