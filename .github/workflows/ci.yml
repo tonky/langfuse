@@ -169,6 +169,7 @@ jobs:
                 [ -n "$entry" ] && raw_cone+=("$entry")
             done <<<"$ENACT_SPARSE_CONE"
             cone=()
+            to_check=()
             if [ "${#raw_cone[@]}" -gt 0 ]; then
                 for entry in "${raw_cone[@]}"; do
                     case "$entry" in
@@ -176,17 +177,28 @@ jobs:
                             cone+=("$entry")
                             ;;
                         *)
-                            kind=$(git cat-file -t "$GITHUB_SHA:$entry" 2>/dev/null || true)
-                            if [ "$kind" = "blob" ]; then
-                                case "$entry" in
-                                    */*) cone+=("${entry%/*}/.enact-direct-files") ;;
-                                esac
-                            else
-                                cone+=("$entry")
-                            fi
+                            to_check+=("$entry")
                             ;;
                     esac
                 done
+            fi
+            if [ "${#to_check[@]}" -gt 0 ]; then
+                idx=0
+                while IFS= read -r kind; do
+                    entry="${to_check[$idx]}"
+                    idx=$((idx + 1))
+                    if [ "$kind" = "blob" ]; then
+                        case "$entry" in
+                            */*) cone+=("${entry%/*}/.enact-direct-files") ;;
+                        esac
+                    else
+                        cone+=("$entry")
+                    fi
+                done < <(
+                    for entry in "${to_check[@]}"; do
+                        printf '%s:%s\n' "$GITHUB_SHA" "$entry"
+                    done | git cat-file --batch-check='%(objecttype)'
+                )
             fi
             if [ "${#cone[@]}" -gt 0 ]; then
                 git sparse-checkout set --cone "${cone[@]}"
@@ -553,6 +565,7 @@ jobs:
                 [ -n "$entry" ] && raw_cone+=("$entry")
             done <<<"$ENACT_SPARSE_CONE"
             cone=()
+            to_check=()
             if [ "${#raw_cone[@]}" -gt 0 ]; then
                 for entry in "${raw_cone[@]}"; do
                     case "$entry" in
@@ -560,17 +573,28 @@ jobs:
                             cone+=("$entry")
                             ;;
                         *)
-                            kind=$(git cat-file -t "$GITHUB_SHA:$entry" 2>/dev/null || true)
-                            if [ "$kind" = "blob" ]; then
-                                case "$entry" in
-                                    */*) cone+=("${entry%/*}/.enact-direct-files") ;;
-                                esac
-                            else
-                                cone+=("$entry")
-                            fi
+                            to_check+=("$entry")
                             ;;
                     esac
                 done
+            fi
+            if [ "${#to_check[@]}" -gt 0 ]; then
+                idx=0
+                while IFS= read -r kind; do
+                    entry="${to_check[$idx]}"
+                    idx=$((idx + 1))
+                    if [ "$kind" = "blob" ]; then
+                        case "$entry" in
+                            */*) cone+=("${entry%/*}/.enact-direct-files") ;;
+                        esac
+                    else
+                        cone+=("$entry")
+                    fi
+                done < <(
+                    for entry in "${to_check[@]}"; do
+                        printf '%s:%s\n' "$GITHUB_SHA" "$entry"
+                    done | git cat-file --batch-check='%(objecttype)'
+                )
             fi
             if [ "${#cone[@]}" -gt 0 ]; then
                 git sparse-checkout set --cone "${cone[@]}"
@@ -805,6 +829,7 @@ jobs:
       continue-on-error: true
       uses: actions/upload-artifact@v7
       with:
+        compression-level: "0"
         if-no-files-found: ignore
         name: enact-reach-map
         path: ${{ runner.temp }}/enact-reach
@@ -929,6 +954,7 @@ jobs:
                 [ -n "$entry" ] && raw_cone+=("$entry")
             done <<<"$ENACT_SPARSE_CONE"
             cone=()
+            to_check=()
             if [ "${#raw_cone[@]}" -gt 0 ]; then
                 for entry in "${raw_cone[@]}"; do
                     case "$entry" in
@@ -936,17 +962,28 @@ jobs:
                             cone+=("$entry")
                             ;;
                         *)
-                            kind=$(git cat-file -t "$GITHUB_SHA:$entry" 2>/dev/null || true)
-                            if [ "$kind" = "blob" ]; then
-                                case "$entry" in
-                                    */*) cone+=("${entry%/*}/.enact-direct-files") ;;
-                                esac
-                            else
-                                cone+=("$entry")
-                            fi
+                            to_check+=("$entry")
                             ;;
                     esac
                 done
+            fi
+            if [ "${#to_check[@]}" -gt 0 ]; then
+                idx=0
+                while IFS= read -r kind; do
+                    entry="${to_check[$idx]}"
+                    idx=$((idx + 1))
+                    if [ "$kind" = "blob" ]; then
+                        case "$entry" in
+                            */*) cone+=("${entry%/*}/.enact-direct-files") ;;
+                        esac
+                    else
+                        cone+=("$entry")
+                    fi
+                done < <(
+                    for entry in "${to_check[@]}"; do
+                        printf '%s:%s\n' "$GITHUB_SHA" "$entry"
+                    done | git cat-file --batch-check='%(objecttype)'
+                )
             fi
             if [ "${#cone[@]}" -gt 0 ]; then
                 git sparse-checkout set --cone "${cone[@]}"
@@ -1224,6 +1261,7 @@ jobs:
                 [ -n "$entry" ] && raw_cone+=("$entry")
             done <<<"$ENACT_SPARSE_CONE"
             cone=()
+            to_check=()
             if [ "${#raw_cone[@]}" -gt 0 ]; then
                 for entry in "${raw_cone[@]}"; do
                     case "$entry" in
@@ -1231,17 +1269,28 @@ jobs:
                             cone+=("$entry")
                             ;;
                         *)
-                            kind=$(git cat-file -t "$GITHUB_SHA:$entry" 2>/dev/null || true)
-                            if [ "$kind" = "blob" ]; then
-                                case "$entry" in
-                                    */*) cone+=("${entry%/*}/.enact-direct-files") ;;
-                                esac
-                            else
-                                cone+=("$entry")
-                            fi
+                            to_check+=("$entry")
                             ;;
                     esac
                 done
+            fi
+            if [ "${#to_check[@]}" -gt 0 ]; then
+                idx=0
+                while IFS= read -r kind; do
+                    entry="${to_check[$idx]}"
+                    idx=$((idx + 1))
+                    if [ "$kind" = "blob" ]; then
+                        case "$entry" in
+                            */*) cone+=("${entry%/*}/.enact-direct-files") ;;
+                        esac
+                    else
+                        cone+=("$entry")
+                    fi
+                done < <(
+                    for entry in "${to_check[@]}"; do
+                        printf '%s:%s\n' "$GITHUB_SHA" "$entry"
+                    done | git cat-file --batch-check='%(objecttype)'
+                )
             fi
             if [ "${#cone[@]}" -gt 0 ]; then
                 git sparse-checkout set --cone "${cone[@]}"
@@ -1519,6 +1568,7 @@ jobs:
                 [ -n "$entry" ] && raw_cone+=("$entry")
             done <<<"$ENACT_SPARSE_CONE"
             cone=()
+            to_check=()
             if [ "${#raw_cone[@]}" -gt 0 ]; then
                 for entry in "${raw_cone[@]}"; do
                     case "$entry" in
@@ -1526,17 +1576,28 @@ jobs:
                             cone+=("$entry")
                             ;;
                         *)
-                            kind=$(git cat-file -t "$GITHUB_SHA:$entry" 2>/dev/null || true)
-                            if [ "$kind" = "blob" ]; then
-                                case "$entry" in
-                                    */*) cone+=("${entry%/*}/.enact-direct-files") ;;
-                                esac
-                            else
-                                cone+=("$entry")
-                            fi
+                            to_check+=("$entry")
                             ;;
                     esac
                 done
+            fi
+            if [ "${#to_check[@]}" -gt 0 ]; then
+                idx=0
+                while IFS= read -r kind; do
+                    entry="${to_check[$idx]}"
+                    idx=$((idx + 1))
+                    if [ "$kind" = "blob" ]; then
+                        case "$entry" in
+                            */*) cone+=("${entry%/*}/.enact-direct-files") ;;
+                        esac
+                    else
+                        cone+=("$entry")
+                    fi
+                done < <(
+                    for entry in "${to_check[@]}"; do
+                        printf '%s:%s\n' "$GITHUB_SHA" "$entry"
+                    done | git cat-file --batch-check='%(objecttype)'
+                )
             fi
             if [ "${#cone[@]}" -gt 0 ]; then
                 git sparse-checkout set --cone "${cone[@]}"
@@ -1827,6 +1888,7 @@ jobs:
                 [ -n "$entry" ] && raw_cone+=("$entry")
             done <<<"$ENACT_SPARSE_CONE"
             cone=()
+            to_check=()
             if [ "${#raw_cone[@]}" -gt 0 ]; then
                 for entry in "${raw_cone[@]}"; do
                     case "$entry" in
@@ -1834,17 +1896,28 @@ jobs:
                             cone+=("$entry")
                             ;;
                         *)
-                            kind=$(git cat-file -t "$GITHUB_SHA:$entry" 2>/dev/null || true)
-                            if [ "$kind" = "blob" ]; then
-                                case "$entry" in
-                                    */*) cone+=("${entry%/*}/.enact-direct-files") ;;
-                                esac
-                            else
-                                cone+=("$entry")
-                            fi
+                            to_check+=("$entry")
                             ;;
                     esac
                 done
+            fi
+            if [ "${#to_check[@]}" -gt 0 ]; then
+                idx=0
+                while IFS= read -r kind; do
+                    entry="${to_check[$idx]}"
+                    idx=$((idx + 1))
+                    if [ "$kind" = "blob" ]; then
+                        case "$entry" in
+                            */*) cone+=("${entry%/*}/.enact-direct-files") ;;
+                        esac
+                    else
+                        cone+=("$entry")
+                    fi
+                done < <(
+                    for entry in "${to_check[@]}"; do
+                        printf '%s:%s\n' "$GITHUB_SHA" "$entry"
+                    done | git cat-file --batch-check='%(objecttype)'
+                )
             fi
             if [ "${#cone[@]}" -gt 0 ]; then
                 git sparse-checkout set --cone "${cone[@]}"
