@@ -3,7 +3,7 @@ package enact
 pipeline: {
 	ci: {
 		concurrency: {
-			max_parallel_jobs: 16
+			max_parallel_jobs: 20
 		}
 		remote_cache: {
 			secrets: {
