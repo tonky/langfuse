@@ -135,7 +135,7 @@ pipeline: {
 						memory_mb: 7680
 					}
 					needs: ["@repo/eslint-plugin:build"]
-					tasks: [{command: "pnpm --filter @langfuse/ee --filter @langfuse/shared --filter web --filter worker run lint"}]
+					tasks: [{command: "pnpm --filter @langfuse/icons --filter @langfuse/shared run build && pnpm --filter @langfuse/ee --filter @langfuse/shared --filter web --filter worker run lint"}]
 				}
 			}
 		}
@@ -340,6 +340,7 @@ pipeline: {
 							"SALT": "salt"
 							"NEXTAUTH_SECRET": "secret"
 							"NEXTAUTH_URL": "http://localhost:3000"
+							"NEXT_PUBLIC_LANGFUSE_CLOUD_REGION": "DEV"
 							"VITEST_MAX_WORKERS": "6"
 						}
 					}]
@@ -403,7 +404,7 @@ pipeline: {
 					}
 					tasks: [{
 						command: """
-							set -euo pipefail
+							set -eu
 							if [ -d ../.enact/state/next-cache ]; then
 							  mkdir -p .next
 							  rm -rf .next/cache
@@ -440,9 +441,13 @@ pipeline: {
 						command: "\"$ENACT_EXE\" helper vitest --config vitest.client.config.mts --arg=--project --arg=client {relative_targets}"
 						timeout: "20m"
 						env: {
-							"NODE_ENV":           "test"
-							"NODE_VERSION":       "24"
-							"VITEST_MAX_WORKERS": "2"
+							"NODE_ENV":            "test"
+							"NODE_VERSION":        "24"
+							"VITEST_MAX_WORKERS":  "2"
+							"DATABASE_URL":        "postgresql://postgres@127.0.0.1:5432/postgres"
+							"CLICKHOUSE_URL":      "http://localhost:8123"
+							"CLICKHOUSE_USER":     "clickhouse"
+							"CLICKHOUSE_PASSWORD": "clickhouse"
 						}
 					}]
 				}
