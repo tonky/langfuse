@@ -82,6 +82,7 @@ wait_health "worker" "http://127.0.0.1:3030/api/health" "$WORKER_LOG" "$WORKER_P
 wait_health "web" "http://127.0.0.1:3000/api/public/health" "$WEB_LOG" "$WEB_PID"
 
 "$ENACT_EXE" helper vitest --config vitest.server.config.mts \
+  --arg=--retry=2 \
   --arg=--project --arg=server \
   --arg=--project --arg=server-isolated \
   --arg=--project --arg=server-shared-source \

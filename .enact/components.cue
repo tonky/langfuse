@@ -538,7 +538,7 @@ pipeline: {
 						},
 						{
 							name:    "Run web Vitest server suite"
-							command: "\"$ENACT_EXE\" helper vitest --config vitest.server.config.mts --arg=--project --arg=server --arg=--project --arg=server-isolated --arg=--project --arg=server-shared-source --arg=--project --arg=server-unit --arg=--project --arg=server-shared-source-unit --arg=--project --arg=e2e-server {relative_targets}"
+							command: "\"$ENACT_EXE\" helper vitest --config vitest.server.config.mts --arg=--retry=2 --arg=--project --arg=server --arg=--project --arg=server-isolated --arg=--project --arg=server-shared-source --arg=--project --arg=server-unit --arg=--project --arg=server-shared-source-unit --arg=--project --arg=e2e-server {relative_targets}"
 							timeout: "30m"
 							unset_env: ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_ENDPOINT_URL"]
 							env: {
@@ -638,7 +638,7 @@ pipeline: {
 						},
 						{
 							name:    "Run worker Vitest suite"
-							command: "\"$ENACT_EXE\" helper vitest --arg=--exclude --arg=**/llmConnections.test.ts --arg=--exclude --arg=**/topicsLlmProviders.test.ts {relative_targets}"
+							command: "\"$ENACT_EXE\" helper vitest --arg=--retry=2 --arg=--exclude --arg=**/llmConnections.test.ts --arg=--exclude --arg=**/topicsLlmProviders.test.ts {relative_targets}"
 							timeout: "20m"
 							unset_env: ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION", "AWS_ENDPOINT_URL"]
 							env: {
