@@ -17,7 +17,7 @@ pipeline: {
 			branch:     "main"
 		}
 		binaries: {
-			// langfuse-speed v2: refresh cached enact-linux-x86_64 binary
+			// langfuse-speed p11b-clean-20261127-081922: clean warm benchmark base
 			inputs: [".enact/ci.cue"]
 			fetch: """
 				set -euo pipefail
