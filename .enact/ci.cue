@@ -14,10 +14,10 @@ pipeline: {
 			public_url: "https://cache.tonky.dev"
 			public_key: "enve-r2-1:ckHPTeWVef6mba+1AwWHjKYCsUWKPfP9IXPm5YXNoHg="
 			repo:       "tonky/langfuse"
-			branch:     "main"
+			branch:     "bench-p12-20261127-092105"
 		}
 		binaries: {
-			// langfuse-speed v2: refresh cached enact-linux-x86_64 binary
+			// langfuse-speed bench-p12-20261127-092105: isolated ancestor-only canary
 			inputs: [".enact/ci.cue"]
 			fetch: """
 				set -euo pipefail
